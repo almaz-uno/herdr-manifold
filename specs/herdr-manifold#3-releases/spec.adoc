@@ -1,0 +1,218 @@
+= Versions, builds and releases
+:toc: left
+:toc-title: Contents
+:sectnums:
+:revdate: 2026-10-27
+:status: draft
+:issue: herdr-manifold#3
+
+== What and why
+
+herdr-manifold has no versions, no builds and no CI; the constitution lists
+"CI, versions and releases" as an open question. The author asked for the
+release cycle to be specified right after the purpose and stack (2026-10-27),
+so that the first working build of
+link:../herdr-manifold%231-purpose-and-stack/spec.adoc[herdr-manifold#1 —
+purpose and stack] can be installed on the author's machines the same way
+as every later one.
+
+The approach is the one of the author's other projects — lxqt-weather (its
+specification 001), i3qws (001), qws (004): an annotated tag, a GitHub release
+built by GitHub Actions from the tag, the text of the release taken from
+`RELEASE-NOTES.adoc`, a release script that refuses a tag it should not
+release. What differs comes from the stack of herdr-manifold#1:
+
+* the application is Electron, so a release carries the Electron runtime
+  and needs no native build of the project's own code;
+* two packages instead of one: a `.deb` for the Debian 12 machines ws1–ws3
+  and a Flatpak bundle for the Steam Deck ws7, where the root file system is
+  read-only;
+* the version lives in `package.json` files at build time only — the tag is
+  its single source.
+
+This specification can be implemented once `packages/app` of herdr-manifold#1
+exists and opens a window; it does not wait for the rest of herdr-manifold#1.
+
+== Behavior
+
+. *Version* — an annotated tag `vX.Y.Z` on `develop`. Every build takes
+  `git describe --tags --always --dirty` as its version; outside a
+  repository, and in a plain `npm run dev`, it is `dev`. The `version`
+  fields of the `package.json` files in the repository stay `0.0.0` and are
+  never edited by hand: the build passes the version to the packaging tools.
+. *Where the version is seen*:
+.. `herdr-manifold --version` prints `herdr-manifold <version>` and exits
+   before a window is created;
+.. the window title and the "About" dialog show it;
+.. the log of the core writes it on every connection, next to the Herdr
+   `server_version` of the welcome.
+. *Numbers*: the minor version for new behavior, a new setting or a changed
+  default; the patch for fixes without new behavior; the major version only
+  by agreement with the author. Versions start at `0.1.0`.
+. *`RELEASE-NOTES.adoc`* in English: a minor or major release is a chapter
+  `== X.Y.0`, its patches are subsections `=== X.Y.Z`, the newest come
+  first, a heading carries no date.
+. *A release* is a GitHub release on a version tag: the title
+  "herdr-manifold X.Y.Z", the files
++
+----
+herdr-manifold_X.Y.Z_amd64.deb
+herdr-manifold-X.Y.Z-x86_64.flatpak
+SHA256SUMS
+----
++
+and as text the section of the release in `RELEASE-NOTES.adoc` at the tag,
+in Markdown — for `X.Y.0` the chapter up to its first subsection, for a
+patch its subsection; `link:path[text]` becomes a link to the file at the
+tag, `Label::` and `*bold*` become bold. The `.vsix` of the VS Code
+extension joins the release files with the specification of the extension.
+. *The `.deb`* is built by electron-builder: the unpacked application in
+  `/opt/herdr-manifold`, a `herdr-manifold` command in `/usr/bin`, a
+  `.desktop` file and an icon; `Depends` on the libraries Electron needs on
+  Debian 12 (GTK 3, NSS, `libasound2`, `libgbm1`, …). It is installed with
+  `sudo apt install ./<file>.deb` and removed with `sudo apt remove
+  herdr-manifold`.
+. *The Flatpak* has the application ID `uno.almaz.herdr-manifold`, runtime
+  `org.freedesktop.Platform` 25.08 and base `org.electronjs.Electron2.BaseApp`
+  25.08. Its manifest, `packaging/flatpak/uno.almaz.herdr-manifold.yml`,
+  installs the unpacked application built for the `.deb` rather than
+  building it again inside `flatpak-builder`. Permissions: Wayland, X11 as a
+  fallback, DRI, IPC, and the Herdr sockets —
+  `--filesystem=~/.config/herdr` — so that the client reaches
+  `herdr-client.sock` of every session; no network, no home directory. It is
+  installed with `flatpak install --user ./<file>.flatpak`.
+. *Build scripts*, each runnable on ws1 as well as in CI:
+.. `scripts/build-deb.sh` — in a `debian:bookworm` container: `npm ci`, the
+   tests, the build, electron-builder `deb` and `dir`;
+.. `scripts/build-flatpak.sh` — in a container with `flatpak-builder` and
+   the 25.08 runtime, from the unpacked application of the previous step.
+. *`scripts/release.sh vX.Y.Z`* refuses, before building, a tag that is
+  malformed, not annotated, not pushed to `origin`, or already released —
+  pushing a tag and replacing a release are the author's decisions. It
+  builds from a temporary `git worktree` at the tag, checks that
+  `herdr-manifold --version` of the unpacked build is the tag, that the
+  `.deb` has `Version: X.Y.Z` and that the Flatpak bundle has the
+  application ID and the version in its metadata, writes `SHA256SUMS`, and
+  publishes with `gh release create --verify-tag`.
+. *The release text tool* is `tools/relnotes` in TypeScript, an npm
+  workspace with Vitest tests, the port of qws's `internal/relnotes`.
+. *Workflow `test`* runs `scripts/check-specs.sh`, the type check, the
+  linter and the tests of every workspace on every push of a branch and
+  every pull request, in a `debian:bookworm` container with the Node
+  version of `.nvmrc`.
+. *Workflow `release`* runs on the push of a version tag: `test` on the
+  tag, the two builds as jobs of their own, then the release from their
+  files. A pushed tag without a release is released by hand with
+  `gh workflow run release -f tag=vX.Y.Z`.
+. *The first release* is `v0.1.0`, tagged by the author once the pull
+  requests of herdr-manifold#1 and herdr-manifold#3 are merged and
+  herdr-manifold#1 has its results.
+
+== Choices made for the author
+
+Each is the recommended option, taken so that the work could proceed; the
+author may overturn any of them.
+
+. *`debian:bookworm` as the build environment.* The project compiles no
+  native code (herdr-manifold#1, "No native Node modules"), and Electron's
+  own binaries run on old glibc; but `Depends` of the `.deb` must name the
+  Debian 12 packages, and an install test of the package in the same
+  container checks that they resolve — the reason lxqt-weather builds there
+  too.
+. *electron-builder, not Electron Forge*, for the `.deb`: one configuration
+  in `packages/app/package.json` gives both the `.deb` and the unpacked
+  directory the Flatpak reuses.
+. *An own Flatpak manifest with `flatpak-builder`*, as for ilovlya, rather
+  than the Flatpak target of electron-builder: the permissions — above all
+  the Herdr sockets — and the runtime branch are written down in one file
+  the author can read.
+. *Runtime 25.08.* It and its Electron base app are on Flathub, and the
+  25.08 runtime is installed on ws7 (Chrome and Firefox use it); 26.08 is
+  there as well and is the next step, 24.08 is at the end of its support.
+. *The application ID `uno.almaz.herdr-manifold`*, after `uno.almaz.ilovlya`
+  (the author's choice, 2026-10-27). Flatpak and D-Bus accept a hyphen in
+  the last element but discourage it, and Flathub's review may ask for
+  another ID: publishing there is outside this specification.
+. *`amd64` only.* All the author's machines are `x86_64`.
+. *No code signing and no automatic updates*: the release files are checked
+  against `SHA256SUMS`, and installing a new version is `apt` or `flatpak`.
+
+== Existing installations
+
+None: nothing has been released. From `v0.1.0` on, a newer `.deb` or
+Flatpak replaces the previous one in place; the settings of the application
+live in `~/.config/herdr-manifold` (`~/.var/app/uno.almaz.herdr-manifold`
+under Flatpak) and survive an upgrade.
+
+== Constitution
+
+* A new section "Releases and versions" with the rules above.
+* Section "Verifiability": the checks run in GitHub Actions on every push
+  and pull request, and gate the release.
+* Section "Stack and layout": `scripts/`, `tools/relnotes`,
+  `packaging/flatpak/`, `.github/workflows/`, `.nvmrc`.
+* Section "Documentation is part of the change": `RELEASE-NOTES.adoc`.
+* The open question "CI, versions and releases" is closed.
+
+== Acceptance criteria
+
+[cols="1,6"]
+|===
+| # | Criterion and method
+
+| K1
+| Release text: from the real `RELEASE-NOTES.adoc`, the chapter of 0.1.0
+  without its heading; from a fixture, a patch — only its subsection, and a
+  chapter — without the text of its patches; a missing section — an error.
+  Links broken over a line, `Label::` and bold translated. Vitest in
+  `tools/relnotes`.
+
+| K2
+| `scripts/release.sh` refuses before building, with no worktree made: no
+  tag or a malformed one — the usage, exit status 2; a tag that does not
+  exist or is not annotated, not pushed, or already released — exit
+  status 1. Run on ws1.
+
+| K3
+| Version: in a working copy, `herdr-manifold --version` of a build equals
+  `git describe --tags --always --dirty`, and becomes `-dirty` after an
+  edit; `npm run dev` shows `dev`; no `package.json` in the repository has
+  a version other than `0.0.0`.
+
+| K4
+| `.deb` from the branch, built by `scripts/build-deb.sh` on ws1:
+  `dpkg-deb -f` gives `Package: herdr-manifold`, the version and `Depends`;
+  `apt install ./<file>.deb` succeeds in a clean `debian:bookworm`
+  container; installed on ws1, `herdr-manifold --version` runs and the
+  window opens.
+
+| K5
+| Flatpak from the branch, built by `scripts/build-flatpak.sh`: `flatpak
+  info` of the installed bundle gives the ID, runtime 25.08 and the
+  permissions above and no others; on ws7, installed with `--user`, the
+  application opens and connects to the Herdr session running there.
+
+| K6
+| Workflow `test` passes on GitHub for the branch and for its pull request.
+
+| K7
+| Release `v0.1.0`, after the author's tag: workflow `release` runs `test`
+  on the tag, both builds, the release; the three files are there and
+  match `SHA256SUMS`; the `.deb` installs on ws1, ws2 and ws3, the Flatpak
+  on ws7, and each prints `herdr-manifold v0.1.0`. `scripts/release.sh`
+  then refuses the released tag.
+|===
+
+== Open decisions
+
+* *Herdr on ws7* — whether ws7 runs a Herdr server for K5 and K7, or the
+  Flatpak is checked there against a session started for the purpose.
+* *Dependency updates* — Electron, electron-builder and the runtime branch
+  move on their own schedule; qws and lxqt-weather keep them current with
+  a specification of their own, and so will herdr-manifold, later.
+
+== Outside the specification
+
+* The `.vsix`, its packaging and a marketplace — with the VS Code
+  extension.
+* Flathub, AppImage, `linux-arm64`.
