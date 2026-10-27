@@ -1,0 +1,114 @@
+= herdr-manifold project constitution
+:toc: left
+:toc-title: Contents
+:toclevels: 2
+:sectnums:
+:revdate: 2026-10-26
+
+The set of rules a specification does not override. The specification decides
+_what_ a change does; the constitution constrains _how_ it may be done, and it
+applies equally to a human and to an agent.
+
+== Document status
+
+The constitution describes what the project actually follows, not what it
+would like to follow. Every rule is backed by a place in the repository —
+`AGENTS.md`, the directory layout, the code, the documents — and can be
+checked rather than taken on trust.
+
+herdr-manifold adopted spec-driven development before any code was written
+(2026-10-26). The constitution therefore holds only the rules that do not
+depend on the stack; the rest is listed as open at the end of the document
+and becomes a section once a specification decides it.
+
+Amending the constitution is a separate change with its own specification: a
+rule is either rewritten or withdrawn, and the specification says on what
+grounds. Silently diverging from the constitution is not allowed: if the code
+contradicts it, the error is either in the code or in this document, and both
+cases need an explicit decision, not an omission.
+
+== Language
+
+The project language is English (`AGENTS.md`): documentation, comments,
+commit messages, specifications, user-visible strings, log messages.
+Identifiers, file names, configuration keys and external terms keep their
+original spelling.
+
+== Documentation is part of the change, not its consequence
+
+A document describing the behavior of the extension is updated in the same
+change set that changes that behavior. A description that lags behind the
+code is worse than a missing one: decisions are made from it.
+
+`specs/` holds the rationale and acceptance criteria of individual changes.
+The description of the current behavior is `README.md`.
+
+== Verifiability
+
+Tests are updated together with the implementation — in the same change, not
+"later". `scripts/check-specs.sh` passes locally before a change is proposed
+for commit.
+
+Behavior that can only be observed in a running VS Code with a running Herdr
+is checked by a manual scenario written in the specification: the versions of
+VS Code and Herdr, steps and the expected observable result.
+
+== Decisions rest on measurements
+
+An acceptance criterion says what is checked and how: a number with its
+measurement method, a named test, or a reproducible manual scenario with an
+observable result. "Works better", "faster", "looks right" are not criteria
+and do not enter a specification in that form.
+
+The numbers a decision rests on are reproducible: the specification says on
+what data and how they were obtained, so that the next reader can repeat or
+refute them instead of trusting a retelling.
+
+A decision not yet made is recorded as open. A specification that hides an
+unresolved choice behind a plausible default is worse than one that admits it.
+
+== Secrets
+
+There are no secrets in the repository. Should a change introduce one — a
+token for a marketplace, say — the local value stays outside git, and the
+repository holds only an example with empty values.
+
+== Working with history
+
+The agent does not run `git commit`, `push`, create tags or branches for a
+commit without the author's explicit agreement — even when the task looks
+finished. Model co-authorship (`Co-Authored-By`, "Generated with…") is not
+added to commit messages or pull request descriptions.
+
+Commit messages: a gitmoji, then a Conventional Commits type and a summary —
+`✨ feat:`, `🐛 fix:`, `📝 docs:`, `♻️ refactor:`, `🔧 chore:`.
+
+== Specifications
+
+* The layout of `specs/` is the project's own, described in
+  `specs/README.adoc` — the one of the author's projects qws, siphon,
+  lxqt-weather and i3qws. No external framework of spec-driven development —
+  OpenSpec, GSD, Spec Kit — is adopted: each brings Markdown among AsciiDoc
+  documents, directories and commands of its own and a release cycle the
+  project does not control.
+* A specification does not copy what git and the tracker hold — whether the
+  change is merged or released, whether its issue is closed.
+* The form of `specs/` is checked by `scripts/check-specs.sh`. The check sees
+  the form, not the truth: that a specification matches the code rests on its
+  criteria (section "Decisions rest on measurements").
+
+== What the constitution does not regulate
+
+Open questions, recorded as open. Each is closed by a separate change with a
+specification, after which the corresponding section appears above.
+
+* *Purpose and scope* — what the extension does for a Herdr user; the first
+  specification decides it.
+* *Stack and layout* — language, build and bundling, the minimal VS Code
+  version (`engines.vscode`), the test runner, the directory layout.
+* *Talking to Herdr* — through its CLI, a socket or another interface; which
+  Herdr versions are supported and how a missing Herdr is reported.
+* *Repository and tracker* — where the code and the issues live; until then
+  `:issue:` of a specification has no tracker to point to.
+* *CI, versions and releases* — the checks on every push, the versioning
+  rules, packaging into a `.vsix`, publishing to a marketplace or not.
