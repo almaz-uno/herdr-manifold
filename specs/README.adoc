@@ -20,15 +20,23 @@ change does; the constitution constrains how it may be done.
 specs/
   README.adoc              this file
   constitution.adoc        rules that apply to every change
-  NNN-short-slug/
+  herdr-manifold#<N>-<slug>/
     spec.adoc              what and why, plus acceptance criteria
     research.adoc          measurements and findings the spec rests on
     plan.adoc              technical approach: files, order, what is reused
     tasks.adoc             ordered steps, each verifiable on its own
 ----
 
-Directories are numbered in the order work starts. The slug names the change,
-not its implementation: `001-pane-view`, not `001-add-tree-provider`.
+The naming follows the author's projects pdt-moleskine and zoo. The name of a
+directory is the name of its issue branch without the prefix `issue/`: the
+branch `issue/herdr-manifold#12-pane-view` has the directory
+`specs/herdr-manifold#12-pane-view/`. `<N>` is the number of the issue in
+`almaz-uno/herdr-manifold`, decimal, without leading zeros; GitHub hands it
+out, so parallel branches need not agree on numbering. A specification is
+referred to by that name — `herdr-manifold#12` — and its title carries no
+number. `<slug>` is lowercase words of letters and digits joined by hyphens;
+it names the change, not its implementation: `pane-view`, not
+`add-tree-provider`.
 
 Supporting material for a change — measurement scripts, recorded Herdr
 output, reference data — lives in the same directory next to the documents
@@ -39,12 +47,11 @@ The form of the directory is checked by `scripts/check-specs.sh`, locally
 before a change is proposed:
 
 * every entry of `specs/` is `README.adoc`, `constitution.adoc` or a
-  directory `NNN-slug` — three digits, a hyphen, lowercase words of letters
-  and digits joined by hyphens;
+  directory `herdr-manifold#<N>-<slug>`;
 * no two directories share a number;
 * every directory has `spec.adoc`, whose header — the lines before the first
-  empty one — has `:status:` of section "Rules" and `:issue:` with the number
-  of the issue;
+  empty one — has `:status:` of section "Rules" and `:issue:` equal to
+  `herdr-manifold#<N>` of the directory name;
 * an `implemented` specification has the section `== Results`.
 
 The check sees the form, not the truth: that a specification matches the code
@@ -85,10 +92,17 @@ The repository and its tracker are not chosen yet (constitution, section
   to the specification. Acceptance criteria are not copied into the issue —
   they are linked: a diverged copy of the criteria misleads whoever reads the
   change half a year later.
-. Then the branch `issue/herdr-manifold#NN-slug` is created off `develop`, where
-  the slug matches the slug of the specification directory.
-. The `:issue:` attribute with the issue number is added to the header of
-  `spec.adoc`, so that the link is two-way and survives a branch rename.
++
+The link is a Markdown link to the file on the issue branch, with `#`
+encoded as `%23`, or GitHub takes it for an anchor:
+`[spec.adoc](https://github.com/almaz-uno/herdr-manifold/blob/issue/herdr-manifold%2312-pane-view/specs/herdr-manifold%2312-pane-view/spec.adoc)`.
+. Then the branch `issue/herdr-manifold#<N>-<slug>` is created off
+  `develop`, and the specification directory of the same name without
+  `issue/`. The issue comes first for this reason: without its number
+  neither the branch nor the directory can be named.
+. The attribute `:issue: herdr-manifold#<N>` — the number of the directory
+  name — is added to the header of `spec.adoc`, so that the link is two-way
+  and survives a branch rename.
 . The specification is the first commit of the branch, `📝 docs:`, before any
   code.
 . A pull request whose specification is not yet `implemented` is opened as a

@@ -1,4 +1,4 @@
-= 001 — research: the Herdr socket API
+= Purpose and stack — research: the Herdr socket API
 :toc: left
 :toc-title: Contents
 :sectnums:

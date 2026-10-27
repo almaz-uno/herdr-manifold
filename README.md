@@ -7,4 +7,4 @@ Visual Studio Code extension over the same core comes second.
 
 Work in progress: nothing is implemented yet. What the client is going to do
 is decided in [`specs/`](specs/README.adoc), starting with
-[001 — purpose and stack](specs/001-purpose-and-stack/spec.adoc).
+[herdr-manifold#1 — purpose and stack](specs/herdr-manifold%231-purpose-and-stack/spec.adoc).

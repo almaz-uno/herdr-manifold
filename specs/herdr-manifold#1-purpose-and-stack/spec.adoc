@@ -1,10 +1,10 @@
-= 001 — purpose and stack: a desktop client for Herdr
+= Purpose and stack: a desktop client for Herdr
 :toc: left
 :toc-title: Contents
 :sectnums:
 :revdate: 2026-10-27
 :status: draft
-:issue: 1
+:issue: herdr-manifold#1
 
 == What and why
 
