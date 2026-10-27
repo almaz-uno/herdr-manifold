@@ -142,8 +142,6 @@ author may overturn any of them.
   session share pane sizes, focus and the active tab.
 * *Endpoint requests* — how `ClientShellEndpointRequest` carries the
   methods of the welcome and its response chunks.
-* *Repository and tracker* — `almaz-uno/herdr-manifold` on GitHub exists;
-  `:issue:` of this specification stays empty until its issue is opened.
 * *Packaging and releases* — a `.deb` built on Debian 12 for ws1–ws3 and a
   Flatpak on `org.freedesktop.Platform` with the Electron base app for the
   Steam Deck (ws7) are the direction; a later specification together with
@@ -153,8 +151,9 @@ author may overturn any of them.
 
 When this specification is implemented:
 
-* the open questions "Purpose and scope", "Stack and layout" and "Talking to
-  Herdr" are closed and become sections of the constitution with the rules
+* the open questions "Purpose and scope", "Stack and layout", "Talking to
+  Herdr" and "Repository and tracker" — GitHub, `almaz-uno/herdr-manifold`,
+  with its issues — are closed and become sections of the constitution with the rules
   above;
 * the constitution and `specs/README.adoc` stop speaking of "the extension"
   alone: section "Verifiability" names the desktop application with a
@@ -218,6 +217,5 @@ When this specification is implemented:
   restart of the client.
 
 | K10
-| `scripts/check-specs.sh` passes, with `:issue:` filled in once the issue
-  exists.
+| `scripts/check-specs.sh` passes.
 |===
