@@ -1,0 +1,245 @@
+= 001 — research: the Herdr socket API
+:toc: left
+:toc-title: Contents
+:sectnums:
+:revdate: 2026-10-27
+
+Facts the link:spec.adoc[specification] rests on, measured on ws1 on
+2026-10-26 against Herdr 0.9.5 (stable channel), from inside a Herdr pane
+(`HERDR_ENV=1`).
+
+== Versions
+
+`herdr status`:
+
+----
+client:  version 0.9.5, channel stable, protocol 22, endpoint_protocol_generation 1
+server:  status running, version 0.9.5, private_protocol 22,
+         socket /home/kovrov/.config/herdr/herdr.sock
+----
+
+The toolchain on ws1: Node 24.22.1, npm 11.19.1, cargo and rustc 1.95.0,
+VS Code 1.143.1, `libwebkit2gtk-4.1-0` 2.50.6 (the WebKitGTK Tauri 2 needs on
+Linux).
+
+== Schema
+
+`herdr api schema --json` prints a JSON Schema of 272 578 bytes: `protocol`
+22, `schema_version` 1, and five schemas — `request`, `success_response`,
+`error_response`, `event`, `subscription_event`.
+
+`request` has 102 methods. Those the console uses: `ping`,
+`session.snapshot`, `agent.list`, `agent.focus`, `pane.read`,
+`events.subscribe`. The rest cover workspaces, tabs, panes, layout,
+worktrees, agents, notifications, plugins and the server.
+
+Agent statuses (`AgentStatus`): `idle`, `working`, `blocked`, `done`,
+`unknown`.
+
+== Framing
+
+A Unix socket at the path of `herdr status`, one JSON object per line in
+each direction (NDJSON). A request carries `id`, `method` and `params`; a
+response carries the same `id` and either `result` or `error`. Measured with
+a Python client:
+
+----
+→ {"id":"1","method":"ping","params":{}}
+← {"id":"1","result":{"type":"pong","version":"0.9.5","protocol":22,
+    "capabilities":{"live_handoff":true,"detached_server_daemon":true,
+    "endpoint_protocol_generation":1,"surface_interest":true,
+    "health_check":true,"ssh_agent_registration":true}}}
+----
+
+An invalid request gets an error with a code, on the same line protocol:
+
+----
+← {"id":"s1","error":{"code":"invalid_request","message":"invalid request:
+    missing field `pane_id` at line 1 column 129"}}
+----
+
+== Subscriptions
+
+`events.subscribe` takes `subscriptions`, a list of `{"type": …}`, and
+answers `{"type":"subscription_started"}`; the events then arrive on the same
+connection.
+
+Types without parameters — the whole session:
+
+* `workspace.created`, `.updated`, `.metadata_updated`, `.renamed`,
+  `.moved`, `.reordered`, `.closed`, `.focused`;
+* `worktree.created`, `.opened`, `.removed`;
+* `tab.created`, `.closed`, `.focused`, `.renamed`, `.moved`;
+* `pane.created`, `.closed`, `.updated`, `.focused`, `.moved`, `.exited`,
+  `.agent_detected`;
+* `layout.updated`.
+
+Types bound to one pane — `pane_id` is required:
+
+* `pane.agent_status_changed` (optional `agent_status` to filter);
+* `pane.output_matched` (`source`, `match`; optional `lines`, `strip_ansi`);
+* `pane.scroll_changed`.
+
+So the status of every agent needs a subscription per pane, renewed as panes
+appear. Subscribing to `pane.agent_status_changed` without `pane_id` is the
+error quoted above.
+
+The event `pane.agent_status_changed` carries `pane_id`, `workspace_id`,
+`agent_status` and, when known, `agent`, `display_agent`, `title` and
+`state_labels`.
+
+== No terminal stream in the socket API
+
+No method or event of the socket API delivers the content of a pane as it
+changes. `pane.read` returns a snapshot of the visible screen or recent
+scrollback, as text or ANSI; input goes through `pane.send_text`,
+`pane.send_keys` and `pane.send_input`. Live pane content is delivered by
+the client protocol of the next section instead.
+
+== Client protocol: endpoint generation 1
+
+Herdr has a second protocol, for clients that draw the shell themselves
+("client-owned shells"). Read from the source at tag `v0.9.5` (commit
+`2ecf19a9`, `src/protocol/endpoint.rs`, `src/protocol/wire.rs`,
+`src/client/handshake.rs`) and checked on 2026-10-27 against a separate
+headless server (`herdr --session mfprobe server`), so that the author's
+session was not touched.
+
+=== Contract
+
+`ENDPOINT_PROTOCOL_GENERATION = 1`, independent of the private protocol 22
+that the CLI, the TUI and live handoff of one installation use. The source
+states: "Generation 1 is the compatibility floor for Local, SSH, and Cloud
+shell endpoints and must remain available indefinitely unless retired for a
+security reason. New JSON fields must be optional or have serde defaults;
+new enum values need an `Unknown` fallback." The handshake compares the
+generation and four codec names, not Herdr build versions.
+
+The contract is not documented outside the source: the documentation of
+`docs/next` has no page on it.
+
+=== Socket and framing
+
+* The client socket is `herdr-client.sock` next to the API socket
+  `herdr.sock`: `~/.config/herdr/` for the default session,
+  `~/.config/herdr/sessions/<name>/` for a named one. The environment
+  variables `HERDR_SOCKET_PATH` and `HERDR_CLIENT_SOCKET_PATH` override them;
+  with only the first set, the client socket is derived from it.
+* A frame is a `u32` little-endian length followed by the payload, at most
+  2 MiB (`MAX_FRAME_SIZE`; 32 MiB with Kitty graphics).
+* The payload is `bincode` 2 with `config::standard()`: integers as varints
+  (below 251 one byte, then markers 251/252/253 for `u16`/`u32`/`u64`), an
+  enum as its variant index, a string as a length and UTF-8 bytes, an
+  `Option` as a byte 0 or 1.
+* `EndpointControl { kind: String, data: String }` is variant 20 of both
+  `ClientMessage` and `ServerMessage`; the source calls its tag and payload
+  part of generation 1. `data` is JSON.
+
+=== Handshake
+
+The client sends `EndpointControl` with `kind = "endpoint.hello.v1"` and an
+`EndpointClientHello`: `generation`, cell size in pixels, `surface_size`
+(`cols`, `rows`), mouse and graphics flags, optional `surface_reuse`,
+`surface_delta`, `surface_scroll`, and the codec lists `shell.snapshot.v1`,
+`shell.surface.v1`, `shell.input.semantic.v1`, `shell.blob.v1`.
+
+Measured with a Python client of 120 lines (no Herdr code), a 100 × 30
+surface, first message 0.25 s after connecting:
+
+[cols="1,3,1"]
+|===
+| # | Message | Size, B
+
+| 1 | `EndpointControl` `endpoint.welcome.v1` | 1 104
+| 2 | `EndpointControl` `endpoint.agent-completions.v1` | 103
+| 3 | `EndpointControl` `shell.snapshot.v1` | 2 856
+| 4 | `MouseCapture` (variant 8) | 3
+| 5 | `ClientShellKeyboardReportAll` (variant 17) | 2
+| 6 | `WindowTitle` (variant 6) | 9
+| 7 | `PaneSurface` (variant 13) | 21 079
+| 8… | `PaneSurfacePatch` (variant 19) | 69–1 522
+|===
+
+The welcome carries `server_version` 0.9.5, the four codecs, 40 `methods`
+— workspace, tab, pane, worktree and layout operations, `command.invoke`,
+`client_shell.surface.set` — and the capabilities `surface_reuse`,
+`surface_delta`, `surface_scroll`, `surface_interest`,
+`presentation_effects_fence`, `health_check`, `agent_view_projection`,
+`agent_completions`. Patches arrived although the hello declined
+`surface_delta`.
+
+The snapshot is JSON with `workspaces`, `tabs`, `panes`, `agents`,
+`agent_order`, the focused workspace, tab and pane, `commands`, the server
+keybindings as TOML (`server_keybindings_toml`) and update and release-note
+notices.
+
+=== Surface
+
+`PaneSurfaceFrame` is the active tab, rendered by the server at the
+client's size, "without sidebar, tab bar, or overlays": `boot_id`,
+`projection_revision`, `surface_revision`, a `FrameData` grid, the pane
+rectangles (`PaneSurfacePane`: `pane_id`, `rect`, `inner_rect`, scroll
+metrics, focus, mouse modes), the split handles, an optional popup and a
+graphics scene. A cell (`CellData`) is a grapheme string, `fg` and `bg` as
+packed `u32` (`0x00…` named color, `0x01…` palette index, `0x02RRGGBB`),
+a `u16` modifier mask, `skip` and an optional hyperlink index.
+
+Decoded by hand from the measured surface: 3 000 cells, 7.0 bytes per cell,
+the shell prompt and output as text; a word printed with `ESC[1;31m` came as
+`fg = 0x01000001` (palette 1) with modifier 1 (bold).
+
+So the client does not emulate a terminal — the server parses VT
+(`crates/ghostty-vt`) and sends cells; the client draws the grid, the
+sidebar and the tab bar from the snapshot, and only the active tab of its
+connection.
+
+=== Input
+
+`ClientShellPaneInput { pane_id, events }` is variant 13 of
+`ClientMessage`; an event is `Key` (semantic key code, modifiers, kind,
+repeat count, optional shifted code point and text, …), `TextCommit`,
+`Mouse` or `Paste`. Sent to `w1:p1` of the probe server: `TextCommit("echo
+typed-by-manifold $((6*7))")` and `Key(Enter)` — 51 bytes; `herdr pane
+read` then showed the command and `typed-by-manifold 42`.
+
+=== Not established for the client protocol
+
+* Which bincode variants besides `EndpointControl` are frozen by
+  generation 1: `PaneSurface`, `PaneSurfacePatch` and `ClientShellPaneInput`
+  are named by the codecs, but the source states the freeze only for
+  `EndpointControl`.
+* The patch format (`surface_delta`, `surface_reuse`, `surface_scroll`).
+* How a second client affects the first: pane sizes, focus, the active tab.
+* How `ClientShellEndpointRequest` carries the 40 methods, and its
+  response chunks.
+
+The probe scripts are kept in `~/.cache/herdr-manifold-probe/`
+(`endpoint_probe.py`, `decode_surface.py`, `input_probe.py`).
+
+== A live session
+
+`agent.list` on ws1 at the time of measurement: 12 agents over 5 workspaces,
+6 `idle`, 5 `done`, 1 `working`. Each entry carries `terminal_id`, `agent`,
+`terminal_title`, `terminal_title_stripped`, `agent_status`,
+`agent_session`, `workspace_id`, `tab_id`, `pane_id`, `focused`,
+`state_change_seq`, `completion_seq`, `cwd`, `foreground_cwd`, `revision`.
+
+== Not established
+
+* Whether a second `events.subscribe` on a connection that already has
+  subscriptions adds to them, replaces them or is refused.
+* Whether `pane.updated` or `pane.agent_detected` carry enough to replace
+  the per-pane status subscription.
+* The shape of `session.snapshot` beyond its schema (`SessionSnapshot`): not
+  yet read from a live server.
+
+== How to reproduce
+
+----
+herdr status
+herdr api schema --json > schema.json
+python3 -c 'import socket; c = socket.socket(socket.AF_UNIX);
+  c.connect("/home/kovrov/.config/herdr/herdr.sock");
+  c.sendall(b"{\"id\":\"1\",\"method\":\"ping\",\"params\":{}}\n");
+  print(c.recv(65536))'
+----

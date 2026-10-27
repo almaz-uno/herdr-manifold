@@ -1,0 +1,223 @@
+= 001 — purpose and stack: a desktop client for Herdr
+:toc: left
+:toc-title: Contents
+:sectnums:
+:revdate: 2026-10-27
+:status: draft
+:issue: 1
+
+== What and why
+
+herdr-manifold was started (2026-10-26) as a VS Code extension for Herdr, with
+its purpose left open (constitution, "What the constitution does not
+regulate"). The author has since decided (2026-10-26, 2026-10-27) that the
+project is a *full Herdr client*: a graphical counterpart of Herdr's own TUI
+that shows workspaces, tabs and live panes, lists the agents with their
+states, and takes the user's input — the target is to use it instead of the
+TUI, not next to it.
+
+The client comes in two front ends over one core: a desktop application
+first, a VS Code extension second. This specification decides the purpose,
+the stack and the layout, and describes the first deliverable — the core and
+the desktop application. The VS Code extension gets a specification of its
+own; here it is a constraint on what the core and the UI may depend on.
+
+It rests on two facts established in link:research.adoc[research]: Herdr has
+a stable protocol for clients that draw the shell themselves (endpoint
+generation 1), which delivers server-rendered cell grids and takes semantic
+input; and a client of it was written without Herdr code, in Python, in an
+afternoon.
+
+== Scope
+
+In scope of this specification:
+
+* *The core* — a client of the endpoint protocol: framing, the `bincode`
+  subset it uses, the handshake, the session model built from the snapshot,
+  surfaces and patches, and input.
+* *The UI* — the window content: the sidebar, the tab bar, the pane area.
+* *The desktop application* — an Electron shell around the core and the UI.
+
+Out of scope, each left to a later specification:
+
+* the VS Code extension;
+* mouse input, copy mode and selection, Kitty graphics, popups;
+* worktrees, plugins and command palette (`command.invoke`);
+* several machines (`herdr --machine`, SSH, Cloud): the client talks to a
+  local server only;
+* a Herdr plugin that bridges from the TUI to the client;
+* packaging, CI and releases.
+
+== Behavior
+
+. *Connection.* On start the client connects to the client socket of the
+  local Herdr server — `herdr-client.sock` of the default session, or of
+  the session named on the command line — and sends `endpoint.hello.v1` for
+  generation 1 with the four codecs of research, section "Handshake". A
+  welcome with another generation or codec, or with an error, is refused
+  with a message that names what differs. A missing server is reported as
+  such, and the client retries without user action until it connects.
+. *Sidebar.* The workspaces of the snapshot in Herdr's order, the tabs of
+  the focused workspace, and the agents (`agents`, `agent_order`) with
+  their status: `idle`, `working`, `blocked`, `done`, `unknown`. `blocked`
+  stands out from the rest.
+. *Pane area.* The active tab as the server renders it: the cell grid of
+  `PaneSurface`, updated by `PaneSurfacePatch`, drawn with its colors,
+  attributes and cursor. The client requests a surface of the size of its
+  pane area in cells and sends `ClientShellResize` when the window changes.
+. *Input.* Keyboard input goes to the focused pane as
+  `ClientShellPaneInput`: printable text as `TextCommit`, other keys as
+  `Key` with modifiers. Shell bindings — switching workspace, tab and pane —
+  are the client's own, not Herdr's prefix keys.
+. *Navigation.* Selecting a workspace, a tab or an agent in the sidebar
+  focuses it in Herdr through the endpoint methods of the welcome
+  (`workspace.focus`, `tab.focus`, `pane.focus`).
+. *Disconnection.* A lost connection or `ServerShutdown` drops the model,
+  shows that Herdr is gone, and starts over from point 1.
+
+== Stack and layout
+
+. *Language* — TypeScript everywhere. The UI is Svelte 5.
+. *Desktop shell* — Electron. The VS Code extension host is Node and its
+  webviews are Chromium, the same as Electron's main process and renderer;
+  so the core and the UI run unchanged in both front ends.
+. *Repository* — one repository with npm workspaces:
++
+----
+packages/
+  core/       protocol client and session model — no Electron, VS Code or DOM imports
+  ui/         Svelte: sidebar, tab bar, pane area — no Electron or VS Code imports
+  app/        Electron: main process, preload, window — the desktop application
+  vscode/     VS Code extension — later specification
+----
+. *The core does not open sockets itself.* It takes an injected byte
+  transport — send bytes, a stream of received bytes, close. Both front ends
+  provide it from `node:net`; tests provide recorded frames.
+. *The UI does not reach the core directly.* It talks to it through a bridge
+  interface of messages — the model and surfaces in, input and navigation
+  out. The desktop application implements it with a preload script and
+  `contextBridge`; the VS Code extension will implement it with webview
+  `postMessage`. The renderer runs without `nodeIntegration`.
+. *No native Node modules* in the core or the UI: they are bound to the
+  Electron ABI of one host, and VS Code's differs from ours (Electron 43.7.7
+  in VS Code 1.143.1).
+. *Tools* — Vite for the UI, esbuild for the main process, the preload and
+  the extension, Vitest for tests.
+. *Supported Herdr* — endpoint generation 1, measured against Herdr 0.9.5.
+
+== Choices made for the author
+
+Each is the recommended option, taken so that the work could proceed; the
+author may overturn any of them.
+
+. *The endpoint protocol, not the socket API, for the client.* The socket
+  API offers only snapshots of pane text (`pane.read`); the endpoint
+  protocol delivers live surfaces and takes input, and is the one the TUI
+  itself is moving to for SSH and Cloud shells.
+. *The core in TypeScript, not Rust.* Decoding the `bincode` subset took 40
+  lines in the probe; drift of the format is caught by tests on recorded
+  frames and against a live server rather than by sharing Herdr's crate,
+  which would need WebAssembly or a native module in VS Code.
+. *Electron over Tauri.* Tauri gives a smaller package, but its WebKitGTK
+  would be a second engine next to VS Code's Chromium, with known trouble
+  on NVIDIA drivers, which ws1–ws3 have (T1200). Electron runs on the
+  glibc of Debian 12 as shipped, as Claude Desktop 3.6556.2 does
+  (Electron 44.9.3, `libc6 (>= 2.34)`).
+. *Svelte 5* — the author's usual UI framework.
+. *npm workspaces*, not pnpm or yarn: npm is already installed and four
+  packages need nothing more.
+
+== Open decisions
+
+* *Drawing the grid* — an own canvas or WebGL renderer, or xterm.js used as
+  a display: cell diffs translated to cursor moves and SGR sequences. The
+  plan decides by a measurement on ws1.
+* *What generation 1 freezes.* The source states it for `EndpointControl`;
+  whether `PaneSurface`, `PaneSurfacePatch` and `ClientShellPaneInput` keep
+  their variant indices and fields is to be asked upstream or read from the
+  history of the source.
+* *The patch format* — `surface_delta`, `surface_reuse`, `surface_scroll`;
+  not yet decoded.
+* *Two clients at once* — how this client and a TUI attached to the same
+  session share pane sizes, focus and the active tab.
+* *Endpoint requests* — how `ClientShellEndpointRequest` carries the
+  methods of the welcome and its response chunks.
+* *Repository and tracker* — `almaz-uno/herdr-manifold` on GitHub exists;
+  `:issue:` of this specification stays empty until its issue is opened.
+* *Packaging and releases* — a `.deb` built on Debian 12 for ws1–ws3 and a
+  Flatpak on `org.freedesktop.Platform` with the Electron base app for the
+  Steam Deck (ws7) are the direction; a later specification together with
+  CI.
+
+== Constitution and documents
+
+When this specification is implemented:
+
+* the open questions "Purpose and scope", "Stack and layout" and "Talking to
+  Herdr" are closed and become sections of the constitution with the rules
+  above;
+* the constitution and `specs/README.adoc` stop speaking of "the extension"
+  alone: section "Verifiability" names the desktop application with a
+  running Herdr; the open question on releases covers the application as
+  well as the `.vsix`;
+* `README.md` describes the client as it is implemented.
+
+== Acceptance criteria
+
+[cols="1,6"]
+|===
+| # | Criterion and method
+
+| K1
+| Decoding: the frames recorded from Herdr 0.9.5 — welcome, snapshot,
+  surface, patches — decode to the expected values; the recorded surface
+  gives the expected rows of text, and the cell printed with `ESC[1;31m`
+  palette color 1 and bold. Test in `packages/core`, without a running
+  Herdr.
+
+| K2
+| Encoding: the hello and a `ClientShellPaneInput` of `TextCommit` and
+  `Key(Enter)` are byte-identical to the frames of the probe. Test in
+  `packages/core`.
+
+| K3
+| Handshake: a welcome with generation 2, with another codec, or with an
+  error makes the core refuse with a message naming the difference. Test in
+  `packages/core`.
+
+| K4
+| Boundaries: `packages/core` imports nothing from Electron, VS Code, Node
+  or the DOM; `packages/ui` nothing from Electron, VS Code or Node. A check
+  that runs with the tests.
+
+| K5
+| Against a live server: a test that starts a headless Herdr in a named
+  session of its own, connects, types `echo` with a marker, and finds the
+  marker in the decoded surface. Skipped when `herdr` is not installed.
+
+| K6
+| Manual scenario, Herdr 0.9.5 on ws1: with a session of at least three
+  workspaces, the client shows the same workspaces, tabs, agents and
+  statuses as the TUI; the active tab looks as in the TUI, colors included;
+  `htop` and `vim` in a pane draw and respond to keys.
+
+| K7
+| Input latency: from sending a key to the first patch that changes the
+  cell under the cursor, median and 95th percentile over 200 keystrokes
+  into a shell on ws1, logged by the core: median at most 20 ms, 95th
+  percentile at most 50 ms.
+
+| K8
+| Manual scenario: selecting a workspace, a tab and an agent in the sidebar
+  focuses it, and the pane area shows its tab; resizing the window resizes
+  the panes, and `tput cols` in a pane prints the new width.
+
+| K9
+| Manual scenario: with the Herdr server stopped, the client says that
+  Herdr is not running; after `herdr` is started, it connects without a
+  restart of the client.
+
+| K10
+| `scripts/check-specs.sh` passes, with `:issue:` filled in once the issue
+  exists.
+|===
