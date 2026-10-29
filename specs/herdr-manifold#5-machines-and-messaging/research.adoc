@@ -1,0 +1,329 @@
+= Machines and agent messaging — research
+:toc: left
+:toc-title: Contents
+:sectnums:
+:revdate: 2026-10-29
+
+Facts the link:spec.adoc[specification] rests on, established on 2026-10-29:
+measurements from ws1 against Herdr 0.9.5 on ws1, ws2 and ws3; the Herdr
+source at tag `v0.9.5` (`~/.cache/herdr-src`, paths below are relative to
+it); the sources of two community clients; and published documentation of
+other agent-messaging tools. Every live measurement ran against a throwaway
+server `herdr --session mfprobe`, stopped and deleted afterwards; the
+default sessions of the machines were not touched.
+
+== Herdr across machines
+
+=== Remote bridges
+
+`herdr --remote <host>` is a transparent pipe over the stdio of SSH
+(`src/remote/attach.rs:41-93`): locally a private socket
+`herdr-remote-<pid>-<target>-<session>.sock` (mode 0600), and for every
+connection to it a process `ssh -T <target> "<cmd>"` whose stdin and stdout
+are bridged to the socket (`attach.rs:3041-3069`); a child `herdr client`
+then runs with `HERDR_CLIENT_SOCKET_PATH` pointing at it. On the remote side
+the command is
+
+----
+exec herdr [--session S] remote-client-bridge [--idle-timeout-v1]
+----
+
+(`attach.rs:397-416`), which starts the server if it is not running,
+requires `endpoint_protocol_generation == 1` and forwards stdio to
+`herdr-client.sock` (`src/remote/host.rs:26-63`). So the bytes over SSH are
+exactly the client protocol of endpoint generation 1; there is no other
+transport.
+
+A twin command, `herdr remote-api-bridge`, does the same for `herdr.sock`,
+the NDJSON socket API (`src/remote.rs:15-39`); `herdr --machine <label>`
+uses it for every CLI command (`src/cli/target.rs:66-100`), and repeats only
+a read-only status probe: "Requests that follow the probe must never be
+replayed after an ambiguous SSH failure" (`target.rs:116-117`).
+
+Checked on ws3 through `socat` and `ssh -T ws3 ~/.local/bin/herdr --session
+mfprobe remote-client-bridge`: the bridge started the server itself, the
+handshake gave the usual welcome, snapshot and surface. The same with
+`remote-api-bridge` answered `ping` and `agent.list`.
+
+No TCP listener exists in `src/` (`TcpListener`, `TcpStream`: no matches);
+"Cloud" appears once, in a comment (`src/protocol/endpoint.rs:5`), with no
+implementation in 0.9.5.
+
+=== The catalog of machines
+
+Herdr 0.9.0 added saved machines. The catalog is
+`<state_dir>/client/endpoints.json`, `{version: 1, selected_profile?, ssh:
+[{id, label, target, session, enabled}]}`, at most 64 profiles in 64 KiB,
+unknown fields refused (`src/client/endpoint/catalog.rs:10-82`). `id` is 32
+hex digits, opaque and stable (`src/client/endpoint.rs:25-60`). `herdr
+machine list --json` prints `{id, label, target, session, enabled,
+selected}` per machine, `herdr machine status --json` adds `reachable`,
+`disabled`, `auth required` or `error` (`src/cli/machine.rs:27-163`).
+
+The TUI keeps one connection per machine, each through its own SSH bridge
+(`src/remote/saved.rs:15-41`, `src/client/endpoint/supervisor.rs:288`). Only
+the selected machine streams a surface; the others send metadata and
+statuses (`client_shell.surface.set`; Herdr documentation, "Connecting
+machines"). A saved machine must offer the capabilities `surface_interest`
+and `health_check`.
+
+=== Identity
+
+* "Workspace, tab, pane IDs, and agent names are scoped to one server. Two
+  machines may both contain `w1:p1`" (Herdr documentation, "Connecting
+  machines"); `w<N>` comes from a per-process counter
+  (`src/workspace.rs:104-110`).
+* The welcome carries `generation`, `server_version`, codecs, methods,
+  capabilities (`src/protocol/endpoint.rs:93-107`); the snapshot has no host
+  or machine identity (`src/protocol/wire.rs:916-951`). A machine is known
+  to a client only by its own profile.
+* `boot_id = "<pid>-<unix_nanos>"`, new at every server start
+  (`src/server/headless.rs:369-376`); endpoint requests with another
+  `boot_id` get `stale_boot`. It tells server runs apart, not machines.
+
+=== What the client protocol does not carry
+
+The endpoint methods offered to a client shell are a fixed list
+(`src/server/client_commands.rs:15-56`): workspace, tab, pane and layout
+operations, `command.invoke`, `client_shell.surface.set`. It has no
+`agent.*`, no `pane.send_*`, no `pane.read`, no `events.*`. Prompting an
+agent and following its status need the socket API — on another machine
+through `remote-api-bridge`.
+
+== Measurements
+
+Keystroke to patch: after the handshake, one `ClientShellPaneInput` with
+`TextCommit("x")` at a time into a shell pane, timing the first
+`PaneSurfacePatch` that follows; 200 keystrokes, 30 ms apart. The script is
+link:latency_probe.py[`latency_probe.py`]. SSH round trip: one byte through
+`ssh -T <host> cat`, 100 times.
+
+[cols="3,1,1,1",options="header"]
+|===
+| Path from ws1 | Median, ms | p95, ms | SSH RTT median, ms
+
+| local socket | 0.4 | 0.6 | —
+| ws3, `ssh -L` of the client socket | 3.6 | 7.3 | 1.7
+| ws3, `remote-client-bridge` through `socat` | 3.5 | 8.7 | 1.7
+| ws2, `ssh -L` of the client socket | 15.7 | 21.9 | 18.4
+| ws2, `ssh` stdio and `socat` on both ends | 18.1 | 22.8 | 18.4
+|===
+
+ws7: SSH RTT 2.2 ms; Herdr not measured there. The machines are reached
+from ws1 through the gateway 192.168.50.5 (network 10.8.5.0/24); ICMP to
+them is dropped.
+
+Herdr adds under a millisecond; the rest is the network. ws2 is slower by an
+order of magnitude than ws3 and ws7 — likely its load: it runs a 12 GiB
+memory test that pushes other processes to swap (inference, not measured).
+
+A Unix socket path is limited to 108 bytes (`sun_path`); a forwarded socket
+in a deep directory fails with `AF_UNIX path too long`.
+
+== Primitives for messages to agents
+
+=== `agent.prompt`
+
+`agent.prompt {target, text, wait?: {until[], timeout_ms}}`
+(`src/api/schema/agents.rs:178-184`; implementation
+`src/app/api/agents.rs:140-266`):
+
+* refused before writing: empty text (`empty_agent_prompt`), unknown agent
+  (`agent_not_found`), agent `blocked` (`agent_blocked`), agent not known,
+  starting or not in the foreground (`agent_not_ready`). An agent that is
+  `working` *is* prompted;
+* the text is written to the PTY, wrapped in `ESC[200~ … ESC[201~` only if
+  the application enabled bracketed paste (`src/app/api_helpers.rs:25-58`);
+  Enter follows 300 ms later (`AGENT_PROMPT_SUBMIT_DELAY`);
+* the API path does not escape `ESC[201~` inside the text, unlike a pasted
+  text (`src/pane.rs:3707-3716`) — read from the code, not tried;
+* without `wait`, success means that the PTY actor wrote the bytes; with
+  `wait`, Herdr waits up to 5 s for `working` or `blocked`, else
+  `agent_prompt_stalled`, then for `until` (`src/api/wait.rs:177-322`). The
+  documentation: "A timeout or `agent_prompt_stalled` does not prove that no
+  input was sent".
+
+`pane.send_text` writes raw bytes, `pane.send_input` text with bracketed
+paste plus keys, `agent.send_keys` keys; `agent.start` answers once the agent
+is ready; `agent.wait` waits for `idle`, `done` or `blocked`.
+
+=== Events and counters
+
+* `events.subscribe`: per-pane `pane.agent_status_changed`,
+  `pane.output_matched`; the payload has no sequence number, the envelope is
+  `{event, data}` (`src/api/schema/events.rs:361-411`); the server keeps 512
+  events in memory and exposes no cursor — missed events are not replayed,
+  the client reconciles from `session.snapshot`.
+* `state_change_seq` grows on every state change of an agent;
+  `completion_seq` is the `state_change_seq` of the last `working|blocked →
+  idle` (`src/app/actions.rs:22-25, 1755-1761`). Both live in memory and
+  restart with the server.
+* `endpoint.agent-completions.v1` carries `{boot_id, revision, completions:
+  {pane_id → completion_seq}}` to client shells.
+
+=== Hooks and plugins
+
+Agent integrations report to Herdr over the socket API, one NDJSON line,
+0.5 s timeout, errors ignored
+(`src/integration/assets/claude/herdr-agent-state.sh:20-99`):
+`pane.report_agent`, `pane.report_metadata` (up to 32 tokens of at most 80
+characters per pane). There is no inbound channel from Herdr to an agent
+other than its terminal.
+
+Plugin event hooks start one process per event; at 32 concurrent commands a
+hook is dropped and only logged (`src/app/api/plugins/runtime.rs:12, 82-84`);
+startup hooks are one-shot, "rather than supervised daemons". A plugin can
+react and call the API, with no delivery guarantee.
+
+Herdr has no agent-to-agent messaging; the documented model is orchestration
+by `agent start`, `prompt`, `wait`, `read`.
+
+== Community clients
+
+=== herdr-gpui
+
+`penso/herdr-gpui`, Rust and GPUI, Apache-2.0, 1 770 stars (2026-10-29).
+
+* *Machines*: `ssh -T -C -o BatchMode=yes … <target> "/bin/sh -c '<script>'"`;
+  the script finds `herdr`, checks `herdr status client --json`, and on
+  `accept` execs `herdr --session S remote-client-bridge`
+  (`crates/herdr-client/src/ssh.rs`). A candidate is accepted with
+  generation 1 and `surface_interest`, `presentation_effects_fence`,
+  `health_check`. All enabled machines stay connected with inactive
+  surfaces; the agent list aggregates them with host labels; reconnection
+  backs off to 30 s; the catalog is `herdr machine list`, read every 2 s.
+* *Protocol*: `crates/herdr-protocol`, "Adapted from herdr
+  src/protocol/<file>.rs (Apache-2.0, see NOTICE.md)". Endpoint requests are
+  `ClientShellEndpointRequest{boot_id, request}` (variant 15) with the JSON
+  envelope `{id, method, params}`, answered by
+  `ClientShellEndpointResponseChunk{boot_id, request_id, final_chunk, data}`
+  (variant 18).
+* *Patches*, each an `EndpointControl` whose `kind` names it:
+** `endpoint.surface-delta.v1` — base64 of bincode `SurfaceDelta{base
+   revisions, surface metadata, rows, popup}`; applied only if `boot_id`,
+   both base revisions and the size match and `surface_revision = base + 1`;
+** `endpoint.surface-reuse.v1` — JSON, metadata only, cells of the base
+   frame kept;
+** `endpoint.surface-scroll.v1` — base64 of a count (1–64) of 10-byte
+   rectangles with a signed shift, then one framed `PaneSurfacePatch`.
+* *Orchestration*: `herdr-orchestrator` dispatches issues to agents with
+  `herdr agent prompt <pane> <text>`, retrying only the structural refusal
+  `agent_pane_busy`; no agent-to-agent protocol.
+
+=== Ovis
+
+`devswha/ovis`, formerly `herdr-web-ui`, MIT, Bun, TypeScript, React and
+xterm.js; a Herdr plugin.
+
+* *Machines*: browser → connection server → `ssh -L` to a loopback bridge
+  that Ovis installs on each machine (Bun bundle, SHA-256 checked) →
+  `herdr.sock`. It uses the socket API, not the client protocol. Catalog
+  from `herdr machine list --json` every 5 s; sidebar machine → workspace →
+  pane; a disconnected machine keeps its last roster, disabled.
+* *Delivery* (`server/pending-input.ts`, `server/input-guard.ts`): a queue
+  per pane with states `held`, `queued`, `sending`, `uncertain`; a message
+  is sent only to an agent that is `idle` or `done`, by `agent.prompt`;
+  delivery is confirmed by the agent turning `working` and then ready, not
+  by the RPC answer; no turn within 10 s holds the message; a send that may
+  have typed part of the text locks the pane as `uncertain` until a human
+  looks; the identity of the target (terminal, session, agent) is checked
+  again just before writing; `resend_id` makes a retried send happen once.
+* No agent-to-agent messaging.
+
+== Agent messaging elsewhere
+
+[cols="2,2,3,3,2",options="header"]
+|===
+| Tool | Transport | Reaches the agent | Acknowledgement, persistence | Across machines
+
+| MCP Agent Mail (Python, deprecated; Rust, v0.3)
+| MCP over HTTP or stdio; SQLite and a git archive
+| pull: the agent calls `fetch_inbox`
+| `ack_required`, per-recipient read and ack; Rust: durable per-recipient
+  event feed with a client-kept cursor
+| one server; HTTP with a token
+
+| Claude Code agent teams (experimental)
+| JSON mailbox files under `~/.claude/teams`
+| automatically, at turn boundaries
+| a send succeeds once written; task claims under a file lock
+| no
+
+| Claude Code cross-session messaging
+| a Unix socket per session
+| between tool calls, or a new turn when idle
+| hold queue with approval, deduplication, rate limit; marked "not from
+  the user"
+| through Anthropic servers with Remote Control only
+
+| Claude Code hooks, channels
+| hooks; MCP server pushing events
+| `UserPromptSubmit`/`SessionStart` context, `Stop` with `block`; channel
+  events in a live session
+| none of their own
+| channel server anywhere
+
+| Herdr `agent.prompt`
+| socket API → PTY
+| typed into the terminal
+| `agent_blocked`, `agent_prompt_stalled`; no idempotency
+| SSH, `--machine`
+
+| pi-shepherd (Pi on Herdr)
+| Herdr CLI through a parent broker
+| next turn or steering, never inside a tool call
+| `expectsReply` and `replyTo`, 20 min deadline, notes on disk
+| no
+
+| herdr-link
+| Herdr CLI, MCP adapters
+| typed into the pane (inference)
+| none, stated
+| no, one workspace
+
+| ACP (Zed)
+| JSON-RPC over stdio
+| `session/prompt`, `session/update` stream
+| turn events, no queue
+| WebSocket in progress
+
+| A2A
+| JSON-RPC, REST, gRPC
+| task API
+| task states incl. `input-required`; poll, SSE, webhook
+| yes
+
+| tmux scripts (Tmux-Orchestrator)
+| `tmux send-keys`, sleep, Enter
+| typed into the terminal
+| none
+| through SSH
+|===
+
+Sources: `github.com/Dicklesworthstone/mcp_agent_mail`,
+`…/mcp_agent_mail_rust`; `code.claude.com/docs/en/agent-teams`,
+`…/cross-session-messaging`, `…/channels`, `…/hooks`;
+`herdr.dev/docs/agent-automation`, `…/connecting-machines`;
+`github.com/MikkelKappelPersson/pi-shepherd`,
+`github.com/LZHcode1986/herdr-link`; `agentclientprotocol.com`;
+`github.com/Jedward23/Tmux-Orchestrator`.
+
+== Not established
+
+* Whether two connections from the same client to one server may stream two
+  different tabs at once, and how they share pane sizes and focus.
+* Behaviour of `agent.prompt` with a text containing `ESC[201~`.
+* Whether `state_change_seq` survives a live handoff.
+* How Codex and OpenCode receive a message between turns (hooks, an inbox),
+  beyond typing into the terminal.
+* Herdr latency on ws7.
+
+== How to reproduce
+
+----
+herdr --session mfprobe server &                  # on the machine measured
+ssh -f -N -o StreamLocalBindUnlink=yes \
+  -L ~/.cache/mfp/ws3.sock:/home/kovrov/.config/herdr/sessions/mfprobe/herdr-client.sock ws3
+python3 -I latency_probe.py ~/.cache/mfp/ws3.sock w1:p1 200
+herdr --session mfprobe server stop               # then delete the session directory
+----
