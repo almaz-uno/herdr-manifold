@@ -1,0 +1,217 @@
+= Machines and agent messaging
+:toc: left
+:toc-title: Contents
+:sectnums:
+:revdate: 2026-10-29
+:status: draft
+:issue: herdr-manifold#5
+
+== What and why
+
+The author decided on 2026-10-29 why herdr-manifold exists next to the
+community clients of Herdr. herdr-gpui and Ovis are full clients, but they
+copy the layout of the TUI or of a single machine's sidebar, and neither
+lets agents talk to each other. The author needs two things they lack:
+
+. *views organised by workspace across machines* — ws1, ws2, ws3 and ws7
+  each run their own Herdr server, and the work of one project is spread
+  over them;
+. *a reliable scheme of communication between agents* — agent A hands a
+  task or a message to agent B, possibly on another machine, and it is not
+  lost, not garbled, not typed into a busy or blocked agent; B's answer
+  gets back to A; the human sees all of it and can intervene.
+
+Today the only way is to type into the other agent's terminal
+(`agent.prompt`, `tmux send-keys`), which link:research.adoc[research]
+shows to be unreliable by Herdr's own documentation.
+
+This specification is research first. It records what was established, the
+direction taken for both goals, and the experiments that decide what is
+still open. It changes no code; the client itself is
+link:../herdr-manifold%231-purpose-and-stack/spec.adoc[herdr-manifold#1 —
+purpose and stack], whose scope it widens (section "Relation to
+herdr-manifold#1").
+
+== Established
+
+From link:research.adoc[research]:
+
+* A client reaches another machine by running `ssh -T <target> herdr
+  [--session S] remote-client-bridge`: the bytes are the client protocol of
+  endpoint generation 1, unchanged; the bridge starts the server if needed.
+  `remote-api-bridge` does the same for the socket API. Herdr's TUI and
+  herdr-gpui both work this way. Checked on ws3.
+* Over SSH, keystroke to patch costs the SSH round trip plus under 1 ms:
+  3.5 ms median to ws3, 15.7 ms to ws2 (its round trip is 18 ms).
+* Herdr keeps a catalog of machines (`herdr machine list --json`) with
+  stable 32-hex ids. Ids of workspaces, tabs, panes and agent names are
+  unique only within one server; nothing in the protocol names the machine.
+* The client protocol carries no `agent.*` and no `events.*`: prompting
+  agents and following their statuses needs the socket API.
+* `agent.prompt` writes the text into the agent's terminal and Enter 300 ms
+  later; it refuses a `blocked` agent but types into a `working` one; its
+  success does not prove the agent took the text, and its timeout does not
+  prove it did not. Events have no sequence numbers and are not replayed.
+* No client and no Herdr feature does agent-to-agent messaging. The tools
+  that do it reliably keep a durable inbox outside the terminal and let the
+  agent take messages by a tool call (MCP Agent Mail) or at a turn boundary
+  (Claude Code agent teams, cross-session messaging, pi-shepherd).
+
+== Direction
+
+=== Machines
+
+. *The catalog is Herdr's.* The client lists machines from `herdr machine
+  list --json` plus the local server, and keeps no catalog of its own; a
+  machine added in the TUI appears in the client, and back.
+. *Two channels per machine*, both through Herdr's own bridges over SSH:
+  `remote-client-bridge` for the snapshot and surfaces,
+  `remote-api-bridge` for agents, events and prompts. The core takes them
+  as injected byte transports (herdr-manifold#1, "Stack and layout"): the
+  application provides one that spawns `ssh`.
+. *Addresses carry the machine*: `<machine>/<pane>`, where `<machine>` is
+  the Herdr profile id, or `local`. `boot_id` tells the client that a
+  server restarted and its ids are no longer valid.
+. *All machines stay connected*; each reconnects on its own with a backoff,
+  and a machine that is down keeps its last state on screen, marked as
+  stale.
+. *Several surfaces at once.* Each connection streams the active tab of its
+  machine, so the client can show panes of different machines side by side
+  — the TUI shows one machine at a time.
+. *Projects over machines* (the author's choice, 2026-10-29). The main view
+  groups workspaces by project across all machines: a project lists its
+  workspaces, panes and agents from every machine, each marked with its
+  machine:
++
+----
+qws
+  ws1  w2  claude   working
+  ws3  w1  codex    idle
+  ws7  w4  shell
+herdr-manifold
+  ws1  w5  claude   blocked !
+  ws2  w1  claude   done
+----
+
+=== Agent messaging
+
+. *A message is a record, not keystrokes.* Each has an id (ULID), a sender
+  and a recipient as agent addresses, an optional thread and `reply_to`, a
+  body, and a state:
++
+----
+queued → delivered → read → answered | done
+           ↘ held (by the human)    ↘ expired (deadline)
+----
++
+`delivered` means stored in the recipient's inbox; `read` means the agent
+took it by a tool call; the sender sees every state.
+. *A durable inbox* outside any terminal holds the messages; states change
+  only by writes to it.
+. *Agents use tools*, not their terminal: an MCP server on every machine
+  offers `send`, `inbox`, `ack`, `reply`. Claude Code, Codex and OpenCode
+  speak MCP.
+. *The terminal only wakes an agent.* When an agent has unread messages
+  and is `idle` or `done`, the client types a fixed short line ("N new
+  messages: call `inbox`") with `agent.prompt`, and confirms it by the
+  agent turning `working`, as Ovis does. Never into a `blocked` or
+  `working` agent; never the message body.
+. *The human is in the loop*: the client shows threads and states, can hold
+  a recipient's inbox for approval, and marks every message as coming from
+  an agent, not from the user. Rate limits and deduplication stop loops.
+
+== Choices made for the author
+
+Each is the recommended option, taken so that the work could proceed; the
+author may overturn any of them.
+
+. *Herdr's bridges over SSH*, not an own bridge as Ovis installs: nothing
+  to install on the machines, and the version check is Herdr's.
+. *Herdr's catalog of machines*, not an own one: one list for the TUI and
+  the client.
+. *Messages through MCP tools and a durable inbox*, with the terminal used
+  only to wake an agent — the one pattern among those surveyed that gives
+  persistence, acknowledgements and no typing into a busy agent.
+. *Research before code*: what is still open below is decided by the
+  experiments of the acceptance criteria, before a specification of the
+  product.
+
+== Open decisions
+
+* *What makes a project* — the name of the workspace, or the git repository
+  of the panes' working directories (`cwd`, `foreground_cwd` of
+  `agent.list`; the remote URL of the repository), or a mapping the author
+  keeps. Names differ between machines by accident; repositories may be
+  cloned under different paths.
+* *Where the inbox lives* — one broker on ws1 (SQLite), reached from the
+  other machines over SSH; or one per machine with forwarding between them.
+  Losing ws1 stops messaging in the first case.
+* *Own broker or MCP Agent Mail (Rust)* — Agent Mail already has a durable
+  per-recipient feed with a cursor, acknowledgements and a web view; its
+  licence ("MIT+Rider") and its fit with Herdr addresses are to be checked.
+* *Whether the broker is part of the client* — messaging must work while
+  the window is closed, so the broker runs as a service of its own; whether
+  it shares the core of herdr-manifold#1 is open.
+* *Waking agents other than Claude Code* — Claude Code can take a message
+  between tool calls (cross-session messaging, hooks); for Codex and
+  OpenCode, typing the wake-up line may be the only way.
+* *Two tabs of one machine side by side* — needs two connections to one
+  server; whether Herdr allows two streams from one client is not
+  established.
+
+== Relation to herdr-manifold#1
+
+* "Several machines" moves out of the list "Out of scope" of herdr-manifold#1
+  into this specification; herdr-manifold#1 stays the single-machine client
+  and is not changed by this one.
+* Criterion K7 of herdr-manifold#1 ("input latency") is for the local
+  server. For a remote machine the bound is its SSH round trip plus the
+  local bound.
+
+== Acceptance criteria
+
+[cols="1,6"]
+|===
+| # | Criterion and method
+
+| K1
+| Bridges: on ws2, ws3 and ws7, against a throwaway session,
+  `remote-client-bridge` gives a welcome of generation 1 and a surface, and
+  `remote-api-bridge` answers `ping` and `agent.list`; keystroke-to-patch
+  latency over 200 keystrokes and the SSH round trip are recorded in
+  research for each. Script `latency_probe.py`.
+
+| K2
+| Several machines at once: a script of the core's protocol code, connected
+  to ws1, ws2 and ws3 at the same time, prints one list of agents with
+  `<machine>/<pane>` addresses and statuses that matches `herdr agent list`
+  on each machine; stopping the server of one machine marks only its
+  agents stale, and they return when it is started again. The same script
+  prints the projects view: every workspace of the three machines falls
+  under exactly one project, by the rule chosen for "What makes a project".
+
+| K3
+| Baseline: 100 numbered messages typed by `agent.prompt` into an agent on
+  another machine while it is working through a task; recorded in research:
+  how many were refused, lost, merged, or garbled, read from the agent's
+  transcript.
+
+| K4
+| Inbox: the same 100 messages through the inbox prototype between two
+  Claude Code agents on ws1 and ws3: all 100 reach state `read` in order,
+  none is typed into a `blocked` or `working` agent (the client's log of
+  wake-ups against Herdr's status events), none is processed twice.
+
+| K5
+| Human control: with the recipient's inbox held, a message stays `held`
+  until approved in the prototype's view; an agent sending more than the
+  rate limit is refused with a stated reason.
+
+| K6
+| The open decisions above are each closed in this specification — decided,
+  with the experiment that decided it, or moved to a named later
+  specification.
+
+| K7
+| `scripts/check-specs.sh` passes.
+|===
