@@ -2,7 +2,7 @@
 :toc: left
 :toc-title: Contents
 :sectnums:
-:revdate: 2026-10-29
+:revdate: 2026-11-12
 :status: draft
 :issue: herdr-manifold#5
 
@@ -155,6 +155,19 @@ author may overturn any of them.
 * *Waking agents other than Claude Code* — Claude Code can take a message
   between tool calls (cross-session messaging, hooks); for Codex and
   OpenCode, typing the wake-up line may be the only way.
+* *Who wakes agents — the client or a Herdr plugin.* A plugin needs no
+  change to Herdr: a hook on `pane.agent_status_changed` sees an agent turn
+  `idle` or `done`, reads its inbox and types the wake-up line; a startup
+  hook does the same after a restart; an action `deliver`, invoked by the
+  sender (over `ssh <machine>` for another machine), wakes a recipient that
+  is idle already. Waking then works with the window closed and on machines
+  the client is not connected to. Against it: a hook is one process per
+  event and is dropped at 32 commands in flight, so the hook can only speed
+  delivery up, and a periodic pass over the inboxes must stay; two hooks of
+  one agent may run at once, so a wake-up needs a lock per recipient and a
+  record of it before `agent.prompt`; the status carried by the event may be
+  stale, so the hook rereads it with `agent.get`. The inbox and the MCP
+  tools are needed either way.
 * *Two tabs of one machine side by side* — needs two connections to one
   server; whether Herdr allows two streams from one client is not
   established.
@@ -213,5 +226,14 @@ author may overturn any of them.
   specification.
 
 | K7
+| Waking by plugin: a prototype plugin, linked on ws1 and ws3 and tried
+  against a throwaway session, wakes a Claude Code agent that has unread
+  messages within 2 s of it turning `idle`, both after a turn and after a
+  restart of the server; 20 messages sent while the agent works give one
+  wake-up at the end of the turn, not twenty; no wake-up is typed into a
+  `blocked` or `working` agent (the plugin's log against Herdr's status
+  events). The result closes the decision "Who wakes agents".
+
+| K8
 | `scripts/check-specs.sh` passes.
 |===
