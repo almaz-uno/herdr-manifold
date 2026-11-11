@@ -329,6 +329,86 @@ Sources: `github.com/Dicklesworthstone/mcp_agent_mail`,
 `github.com/LZHcode1986/herdr-link`; `agentclientprotocol.com`;
 `github.com/Jedward23/Tmux-Orchestrator`.
 
+== Agents behind a protocol
+
+The IDE extensions do not run the agent's TUI; they drive the agent by a
+structured protocol and draw the conversation themselves. Established on
+2026-11-12 from the installed extension and CLI on ws1.
+
+=== Claude Code in VS Code
+
+Extension `anthropic.claude-code` 2.1.322 bundles the Claude Agent SDK and
+its own `claude` binary (`resources/native-binary/claude`, 2.1.322, 342 MB).
+The SDK's `ProcessTransport` starts it as
+
+----
+claude --output-format stream-json --verbose --input-format stream-json
+       [--permission-prompt-tool=stdio] [--include-partial-messages]
+       [--resume ID | --continue] [--mcp-config JSON] [--permission-mode M]
+       [--session-mirror] ...
+----
+
+(`extension.js`, `initialize()` of the transport). Both directions are NDJSON
+on stdio:
+
+* the agent emits `system`, `assistant`, `user` (tool results), `result` of
+  a turn and, with partial messages, stream events;
+* the host sends `user` messages and `control_request` with subtypes such
+  as `initialize`, `interrupt`, `set_permission_mode`, `set_model`,
+  `mcp_message`, `rewind_files`, `get_context_usage`;
+* `--permission-prompt-tool=stdio` turns permission prompts into control
+  requests to the host (the SDK's `canUseTool`), answered by
+  `control_response`.
+
+The session is the ordinary one: its transcript is resumable by `--resume`
+from the TUI and back.
+
+=== Codex
+
+Not installed in VS Code here; its extension speaks the same server the
+CLI exposes, `codex app-server` (codex-cli 0.167.0, marked experimental):
+JSON-RPC on stdio, schema by `codex app-server generate-json-schema`.
+
+* Client requests include `initialize`, `thread/start`, `thread/resume`,
+  `thread/fork`, `turn/start`, `turn/interrupt`, *`turn/steer`* (add input
+  to the running turn; `expectedTurnId` must match the active turn) and
+  *`thread/inject_items`* (append items to the model-visible history).
+* The server asks the client for approvals: `item/commandExecution/
+  requestApproval`, `item/fileChange/requestApproval`,
+  `item/permissions/requestApproval`, `item/tool/requestUserInput`.
+* Notifications stream the turn as typed items: `item/started`,
+  `item/agentMessage/delta`, `item/commandExecution/outputDelta`,
+  `turn/diff/updated`, `turn/plan/updated`, `turn/completed`,
+  `thread/status/changed`, `thread/tokenUsage/updated`.
+* `codex app-server daemon start|stop` keeps one server per machine with a
+  control socket; `codex app-server proxy` connects stdio to it, so several
+  clients, local or over `ssh`, can reach the same threads.
+
+=== Agent Client Protocol
+
+ACP (from Zed) is JSON-RPC between an editor and an agent. Adapters
+`@agentclientprotocol/claude-agent-acp` and `@agentclientprotocol/codex-acp`
+put Claude Code and Codex behind it; Zed, the Vercel AI SDK and Microsoft's
+Intelligent Terminal are clients. Not checked here: versions of the
+adapters, and how much of the native protocols (control requests, steering)
+they pass through.
+
+Sources: https://ai-sdk.dev/v7/providers/ai-sdk-harnesses/acp,
+https://blog.marcnuri.com/agent-client-protocol-acp-introduction,
+https://codex.danielvaughan.com/2026/06/10/agent-client-protocol-microsoft-intelligent-terminal-codex-cli-multi-agent-ide-ecosystem/.
+
+=== What it means for messages
+
+An agent run behind its protocol takes a message as input of a turn — a
+`user` line to Claude Code, `turn/start` or `turn/steer` to Codex — instead
+of keystrokes; the host knows exactly when a turn ends (`result`,
+`turn/completed`) and answers permission prompts itself. What typing gets
+wrong (section "`agent.prompt`") does not arise. The price: the agent's TUI
+is gone, so its slash commands, dialogs and status must be redone by the
+host; Herdr cannot detect such an agent from the screen, so the host reports
+it with `pane.report_agent`; the protocols change with the agents' versions
+(Codex marks its own experimental).
+
 == Not established
 
 * Whether two connections from the same client to one server may stream two

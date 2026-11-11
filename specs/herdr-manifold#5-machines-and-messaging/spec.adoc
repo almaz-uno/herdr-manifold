@@ -168,6 +168,16 @@ author may overturn any of them.
   record of it before `agent.prompt`; the status carried by the event may be
   stale, so the hook rereads it with `agent.get`. The inbox and the MCP
   tools are needed either way.
+* *Agents behind a protocol.* A meta-agent may run Claude Code
+  (`stream-json` on stdio, as the VS Code extension does) or Codex
+  (`codex app-server`, or ACP adapters for both) instead of their TUI, and
+  draw the conversation as graphics in the client or as text in a Herdr
+  pane. A message then enters as input of a turn, never as keystrokes, and
+  the end of a turn is an event, not a guess from the screen; the inbox and
+  its states stay. Open: whether to speak the native protocols or ACP;
+  how much of the TUI (slash commands, dialogs) the author needs back;
+  whether such a pane is still resumable in the TUI (`claude --resume`,
+  `codex resume`). Facts in research, section "Agents behind a protocol".
 * *Two tabs of one machine side by side* — needs two connections to one
   server; whether Herdr allows two streams from one client is not
   established.
