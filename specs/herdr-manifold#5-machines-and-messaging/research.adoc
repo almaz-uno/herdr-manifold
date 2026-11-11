@@ -365,9 +365,31 @@ from the TUI and back.
 
 === Codex
 
-Not installed in VS Code here; its extension speaks the same server the
-CLI exposes, `codex app-server` (codex-cli 0.167.0, marked experimental):
-JSON-RPC on stdio, schema by `codex app-server generate-json-schema`.
+Extension `openai.chatgpt` 26.1106.51428 bundles its own `codex`
+(`bin/linux-x86_64/codex`, codex-cli 0.167.0-alpha.4.1, with
+`codex-code-mode-host` and `rg`). Its `CodexMcpConnection` spawns
+
+----
+codex -c features.code_mode_host=true -c features.windows_sandbox_service=true \
+      app-server --analytics-default-enabled
+----
+
+with stdio piped (`out/extension.js`, `startCodexProcess`); setting
+`chatgpt.cliExecutable` replaces the binary. The protocol is the one the
+CLI exposes, `codex app-server` (marked experimental): JSON-RPC as lines on
+stdio, schema by `codex app-server generate-json-schema [--experimental]`.
+The extension calls `thread/start`, `thread/resume`, `thread/fork`,
+`turn/start`, `turn/steer`, `turn/interrupt`, `thread/inject_items` and the
+queue below; it also names methods present in neither schema
+(`turn/addUserMessage`, `thread/startAeon`, `thread/stop`), presumably of
+newer servers.
+
+*A queue of pending inputs per thread* (experimental methods):
+`thread/queue/add {threadId, input, clientUserMessageId}` returns a
+`QueuedSubmission {id, input, clientUserMessageId}`; `thread/queue/list`,
+`update`, `delete`, `reorder` edit it; `thread/queue/start` starts a turn
+from a queued submission; `thread/queue/changed` notifies. This is the
+extension's "send while the agent works".
 
 * Client requests include `initialize`, `thread/start`, `thread/resume`,
   `thread/fork`, `turn/start`, `turn/interrupt`, *`turn/steer`* (add input
@@ -400,7 +422,8 @@ https://codex.danielvaughan.com/2026/06/10/agent-client-protocol-microsoft-intel
 === What it means for messages
 
 An agent run behind its protocol takes a message as input of a turn — a
-`user` line to Claude Code, `turn/start` or `turn/steer` to Codex — instead
+`user` line to Claude Code, `turn/start`, `turn/steer` or
+`thread/queue/add` to Codex — instead
 of keystrokes; the host knows exactly when a turn ends (`result`,
 `turn/completed`) and answers permission prompts itself. What typing gets
 wrong (section "`agent.prompt`") does not arise. The price: the agent's TUI
