@@ -419,6 +419,35 @@ Sources: https://ai-sdk.dev/v7/providers/ai-sdk-harnesses/acp,
 https://blog.marcnuri.com/agent-client-protocol-acp-introduction,
 https://codex.danielvaughan.com/2026/06/10/agent-client-protocol-microsoft-intelligent-terminal-codex-cli-multi-agent-ide-ecosystem/.
 
+=== Wrappers in Herdr panes
+
+Herdr sets `HERDR_ENV=1` in every pane (`src/pane.rs:202`,
+`src/pty/backend/unix.rs:77`), so a line in the shell's rc that puts a
+directory of shims first in `PATH` only when `HERDR_ENV=1` makes `claude`
+and `codex` typed in a Herdr pane start a wrapper, and nowhere else.
+
+A wrapper hides the real agent process; `HERDR_AGENT=<agent>` set on the
+wrapper tells Herdr which agent it is (`docs/.../agents.mdx`, "host-visible
+wrapper"; the hint is read from the foreground process's environment,
+`src/platform/mod.rs:605`). Herdr then uses that agent's screen manifest,
+so a wrapper that draws its own screen is misread by the rules made for the
+TUI of Claude Code or Codex.
+
+Reports by `pane.report_agent` take over from the screen only for sources
+on a fixed list, `full_lifecycle_hook_authority` in `src/detect/mod.rs:330`:
+`herdr:pi`, `herdr:omp`, `herdr:mastracode`, `herdr:opencode`, `herdr:kilo`,
+`herdr:kimi`. Claude Code and Codex are not on it; for them the screen stays
+authoritative. A new agent, or a wrapper as an agent of its own, needs a
+change to Herdr ("Adding a completely new agent still requires a Herdr binary
+update"). A local detection manifest (`~/.config/herdr/agent-detection/
+<agent>.toml`) patches the rules for every pane of that agent, wrapped or
+not.
+
+A plugin cannot change the environment of panes it did not open; it can
+open its own panes (`[[panes]]`, with `env` in `plugin.pane.open`) and bind
+keys to actions. It has no non-terminal UI and cannot touch the machine
+picker, where `Local` is fixed in code (`local_endpoint()`).
+
 === What it means for messages
 
 An agent run behind its protocol takes a message as input of a turn — a

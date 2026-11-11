@@ -178,6 +178,18 @@ author may overturn any of them.
   how much of the TUI (slash commands, dialogs) the author needs back;
   whether such a pane is still resumable in the TUI (`claude --resume`,
   `codex resume`). Facts in research, section "Agents behind a protocol".
++
+How it would sit in Herdr: a shim directory first in `PATH` when
+`HERDR_ENV=1` starts the wrapper for `claude` or `codex` typed in a pane;
+the wrapper sets `HERDR_AGENT`; a Herdr plugin carries waking, the message
+pane and keys. Two things need Herdr itself and are to be proposed upstream
+(Apache-2.0) rather than kept in a fork: letting a declared wrapper report
+the full lifecycle, since today only the sources on a fixed list do and
+Claude Code and Codex are not among them; and the machine catalog of
+section 11.3 of the requirements, without the fixed `Local`. The middle
+way keeps the native TUI under the wrapper's own PTY and takes structure
+from the transcript and hooks — the TUI stays, but a message can only wake
+the agent, not enter its turn.
 * *Two tabs of one machine side by side* — needs two connections to one
   server; whether Herdr allows two streams from one client is not
   established.
