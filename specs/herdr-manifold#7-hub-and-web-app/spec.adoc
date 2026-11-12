@@ -33,7 +33,16 @@ them, how the phone gets in, and what the phone shows. It changes no code.
   catalog of machines (Herdr's own, `endpoints.json`) by
   `remote-client-bridge` and `remote-api-bridge` over SSH, and its own
   machine by the local socket. This is the rule "machines are equal" of
-  section 11.3.1 of the requirements, applied to the client.
+  section 8.1 of the requirements, applied to the client.
++
+The API channel (`remote-api-bridge` or `herdr.sock`) of every machine
+stays connected: the sidebar, the phone and the delivery of messages need
+the agents of all machines. The surface channel of a machine is open only
+while some front end shows it, and is closed 30 s after the last one
+leaves. With seven machines a hub on each makes 49 connections; keeping
+their surfaces open would make every Herdr server render tabs for clients
+nobody looks at, and how Herdr shares pane sizes between clients is not
+established.
 . *The core runs in the hub.* The core of herdr-manifold#1 already takes an
   injected byte transport and talks to the UI through a bridge; in the hub
   the transport is the SSH bridge or the local socket, and the bridge to
@@ -45,6 +54,12 @@ them, how the phone gets in, and what the phone shows. It changes no code.
   and adds what a browser cannot: shortcuts a browser keeps for itself
   (`ctrl+w`, `ctrl+t`, `ctrl+n`), the system clipboard, a window of its
   own. The VS Code extension does the same in a webview.
++
+Front ends on the hub's own machine may connect through a Unix socket,
+`$XDG_RUNTIME_DIR/herdr-manifold/hub.sock`, readable by the owner only.
+A Flatpak without network permission has a loopback of its own and cannot
+reach `127.0.0.1` of the machine; a socket in the file system it can, by
+`--filesystem=xdg-run/herdr-manifold`.
 . *A desktop uses its own machine's hub*, so a keystroke costs what it
   costs in herdr-manifold#1: the SSH round trip to the target machine plus
   the local bound, with no extra hop.
@@ -70,7 +85,11 @@ them, how the phone gets in, and what the phone shows. It changes no code.
     addresses of herdr-manifold#5);
   * the threads and states of messages, sending a message to an agent;
   * pending approvals — permission requests relayed by Claude Code channels
-    and approval requests of Codex — answered with one tap;
+    and approval requests of Codex — answered with one tap; both depend on
+    experiments of herdr-manifold#5 (criterion K8 "delivery by channel",
+    decision "Agents behind a protocol"): a channel registers only in an
+    interactive session and, until it is on an allowlist, after a
+    confirmation at every start;
   * a pane opened from an agent, read-only by default, scrolled by touch;
     typing into it is an explicit switch.
 . *Images pasted on the phone* go to the hub as a blob and from there to
@@ -125,9 +144,21 @@ author may overturn any of them.
 * herdr-manifold#5: the broker of messages is part of the hub, which closes
   its decision "Whether the broker is part of the client"; its decision
   "Where the inbox lives" moves here as "Shared state of the hubs".
-* herdr-manifold#3: the hub is a new service to package next to the
-  desktop application (`.deb` and Flatpak); the Flatpak cannot run a user
-  service, so the hub needs its own package.
+* herdr-manifold#3: the hub is packaged in the `.deb` of ws1–ws5 with a
+  user unit, and in archives for ws7 (installed in `~/.local`, its root is
+  read-only) and ws9 (macOS, arm64, `launchd`); the Flatpak is the Electron
+  shell only. The hub runs on the Node that ships with Electron, or on one
+  bundled with an archive.
+
+== Prior art
+
+Ovis (`github.com/devswha/ovis`, formerly `herdr-web-ui`, MIT; Bun,
+TypeScript, React, xterm.js) is a browser and phone client for Herdr:
+chat and live terminal for agent panes, machines over SSH, Web Push. It
+installs a bridge of its own on each machine, where this specification uses
+Herdr's bridges; it has no projects across machines and no messaging
+between agents. Its phone view is to be read before ours is designed
+(research of herdr-manifold#5, section "Ovis").
 
 == Acceptance criteria
 
@@ -154,7 +185,8 @@ author may overturn any of them.
 | K4
 | Phone view: the agents of ws1, ws2 and ws3 with their states; a message
   sent to an agent from the phone; an approval of Claude Code answered from
-  the phone; a pane opened read-only and scrolled. Each checked by hand and
+  the phone, once criterion K8 of herdr-manifold#5 has passed; a pane
+  opened read-only and scrolled. Each checked by hand and
   recorded in research with screenshots.
 
 | K5
