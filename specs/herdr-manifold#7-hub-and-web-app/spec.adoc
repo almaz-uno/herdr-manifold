@@ -25,6 +25,39 @@ same app.
 This specification decides the shape: where hubs run, how front ends reach
 them, how the phone gets in, and what the phone shows. It changes no code.
 
+== Decision of 2026-11-12: Ovis for now
+
+Ovis v0.5.3 (see "Prior art") was installed on ws1 the same day and
+compared with the requirements. The author found that it covers most of
+the need: the phone over NetBird with a certificate from Let's Encrypt,
+the machines in one view, chat and live terminal for agent panes, images
+pasted as files, Web Push, updates from its own settings. The author
+decided to live on Ovis and to put this specification and the client of
+herdr-manifold#1 on hold; gaps are collected while Ovis is in use.
+
+The gaps known at the time of the decision:
+
+* *No messaging between agents* (herdr-manifold#5): Ovis delivers text only
+  by typing it into a pane. Its queue `server/pending-input.ts` is close to
+  the wake-up of an idle agent and may serve a broker that runs next to
+  Ovis.
+* *No projects across machines*: Ovis groups machine → workspace → pane.
+* *One server*: Ovis runs on ws1 and reaches the other machines by SSH;
+  there is no second hub to move to (criterion K3 "Failover").
+
+The installation on ws1, as it stands at the decision:
+
+* A systemd user service `ovis` with `MemoryMax=6G`; Ovis listens on
+  `127.0.0.1:7317` and requires its token; telemetry is off.
+* Caddy listens on ws1's NetBird address, port 443, and proxies to Ovis;
+  the certificate for `ws1.nb.kovrov.space` is obtained by DNS-01 with
+  lego and renewed by a timer. This is directions 6 and 7 below, tried on
+  one machine.
+* Updates by Ovis's own updater, from the branch `main` of its clone.
+
+The direction below stays as written, for the case that the gaps turn out
+to need a client of our own.
+
 == Direction
 
 . *A hub on every machine, all alike.* `herdr-manifold serve` runs as a
@@ -158,7 +191,8 @@ chat and live terminal for agent panes, machines over SSH, Web Push. It
 installs a bridge of its own on each machine, where this specification uses
 Herdr's bridges; it has no projects across machines and no messaging
 between agents. Its phone view is to be read before ours is designed
-(research of herdr-manifold#5, section "Ovis").
+(research of herdr-manifold#5, section "Ovis"). Since 2026-11-12 it is the
+author's working client (see "Decision of 2026-11-12: Ovis for now").
 
 == Acceptance criteria
 
