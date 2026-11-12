@@ -2,7 +2,7 @@
 :toc: left
 :toc-title: Contents
 :sectnums:
-:revdate: 2026-10-27
+:revdate: 2026-11-12
 :status: draft
 :issue: herdr-manifold#3
 
@@ -24,9 +24,15 @@ release. What differs comes from the stack of herdr-manifold#1:
 
 * the application is Electron, so a release carries the Electron runtime
   and needs no native build of the project's own code;
-* two packages instead of one: a `.deb` for the Debian 12 machines ws1–ws3
-  and a Flatpak bundle for the Steam Deck ws7, where the root file system is
-  read-only;
+* several packages instead of one, for seven machines that differ (measured
+  2026-11-12): ws1–ws4 run Debian 12 and ws5 Debian 13, all `x86_64`; ws7
+  is a Steam Deck (SteamOS, root file system read-only, no Node); ws9 runs
+  macOS 26.5 on `arm64`;
+* since link:../herdr-manifold%237-hub-and-web-app/spec.adoc[herdr-manifold#7
+  — hub and web app] every machine runs a hub, `herdr-manifold serve`, as a
+  user service, and the Electron application is a thin shell around the
+  local hub's web app; a release therefore carries the hub for every
+  machine and the shell where a desktop needs it;
 * the version lives in `package.json` files at build time only — the tag is
   its single source.
 
@@ -56,9 +62,11 @@ exists and opens a window; it does not wait for the rest of herdr-manifold#1.
   "herdr-manifold X.Y.Z", the files
 +
 ----
-herdr-manifold_X.Y.Z_amd64.deb
-herdr-manifold-X.Y.Z-x86_64.flatpak
-SHA256SUMS
+herdr-manifold_X.Y.Z_amd64.deb             ws1–ws5: hub, web app, Electron shell
+herdr-manifold-X.Y.Z-linux-x86_64.tar.gz   ws7: hub and web app, installed in ~/.local
+herdr-manifold-X.Y.Z-x86_64.flatpak        ws7: Electron shell only
+herdr-manifold-X.Y.Z-darwin-arm64.tar.gz   ws9: hub and web app, launchd
+SHA256SUMS                                 all of the above
 ----
 +
 and as text the section of the release in `RELEASE-NOTES.adoc` at the tag,
@@ -66,32 +74,48 @@ in Markdown — for `X.Y.0` the chapter up to its first subsection, for a
 patch its subsection; `link:path[text]` becomes a link to the file at the
 tag, `Label::` and `*bold*` become bold. The `.vsix` of the VS Code
 extension joins the release files with the specification of the extension.
-. *The `.deb`* is built by electron-builder: the unpacked application in
-  `/opt/herdr-manifold`, a `herdr-manifold` command in `/usr/bin`, a
+. *The `.deb`* is built by electron-builder for ws1–ws5 (Debian 12 and
+  13): the hub, the web app and the Electron shell unpacked in
+  `/opt/herdr-manifold`, a `herdr-manifold` command in `/usr/bin` (`serve`
+  starts the hub), a systemd user unit `herdr-manifold.service`, a
   `.desktop` file and an icon; `Depends` on the libraries Electron needs on
   Debian 12 (GTK 3, NSS, `libasound2`, `libgbm1`, …). It is installed with
   `sudo apt install ./<file>.deb` and removed with `sudo apt remove
   herdr-manifold`.
-. *The Flatpak* has the application ID `uno.almaz.herdr-manifold`, runtime
+. *The hub's runtime.* In the `.deb` the hub runs on the Node of the
+  bundled Electron (`ELECTRON_RUN_AS_NODE=1`); the archives carry a Node of
+  their own. The systems' Node is not used: its versions on the machines
+  range from 20 to 26, and ws7 has none.
+. *The archives* hold the hub and the web app with the bundled Node and a
+  service definition: on ws7, unpacked into `~/.local` with a systemd user
+  unit, because its root file system is read-only and a Flatpak cannot run
+  a user service; on ws9, with a `launchd` agent. An Electron shell for
+  macOS is outside this specification.
+. *The Flatpak* is the Electron shell only and has the application ID `uno.almaz.herdr-manifold`, runtime
   `org.freedesktop.Platform` 25.08 and base `org.electronjs.Electron2.BaseApp`
   25.08. Its manifest, `packaging/flatpak/uno.almaz.herdr-manifold.yml`,
   installs the unpacked application built for the `.deb` rather than
   building it again inside `flatpak-builder`. Permissions: Wayland, X11 as a
-  fallback, DRI, IPC, and the Herdr sockets —
-  `--filesystem=~/.config/herdr` — so that the client reaches
-  `herdr-client.sock` of every session; no network, no home directory. It is
+  fallback, DRI, IPC, and the directory of the hub's socket —
+  `--filesystem=xdg-run/herdr-manifold` — so that the shell reaches the hub
+  of ws7; no network, no home directory. Without the network permission a
+  Flatpak has a loopback of its own, so even `127.0.0.1` of the machine is
+  out of reach and the hub is reached by its Unix socket. It is
   installed with `flatpak install --user ./<file>.flatpak`.
 . *Build scripts*, each runnable on ws1 as well as in CI:
 .. `scripts/build-deb.sh` — in a `debian:bookworm` container: `npm ci`, the
    tests, the build, electron-builder `deb` and `dir`;
 .. `scripts/build-flatpak.sh` — in a container with `flatpak-builder` and
-   the 25.08 runtime, from the unpacked application of the previous step.
+   the 25.08 runtime, from the unpacked application of the previous step;
+.. `scripts/build-archive.sh <platform>` — the hub archive for
+   `linux-x86_64` in the same container, and for `darwin-arm64` on a macOS
+   runner.
 . *`scripts/release.sh vX.Y.Z`* refuses, before building, a tag that is
   malformed, not annotated, not pushed to `origin`, or already released —
   pushing a tag and replacing a release are the author's decisions. It
   builds from a temporary `git worktree` at the tag, checks that
   `herdr-manifold --version` of the unpacked build is the tag, that the
-  `.deb` has `Version: X.Y.Z` and that the Flatpak bundle has the
+  `.deb` and both archives report the version and that the Flatpak bundle has the
   application ID and the version in its metadata, writes `SHA256SUMS`, and
   publishes with `gh release create --verify-tag`.
 . *The release text tool* is `tools/relnotes` in TypeScript, an npm
@@ -101,7 +125,8 @@ extension joins the release files with the specification of the extension.
   every pull request, in a `debian:bookworm` container with the Node
   version of `.nvmrc`.
 . *Workflow `release`* runs on the push of a version tag: `test` on the
-  tag, the two builds as jobs of their own, then the release from their
+  tag, the builds as jobs of their own (the `darwin-arm64` archive on a
+  macOS runner), then the release from their
   files. A pushed tag without a release is released by hand with
   `gh workflow run release -f tag=vX.Y.Z`.
 . *The first release* is `v0.1.0`, tagged by the author once the pull
@@ -133,16 +158,21 @@ author may overturn any of them.
   (the author's choice, 2026-10-27). Flatpak and D-Bus accept a hyphen in
   the last element but discourage it, and Flathub's review may ask for
   another ID: publishing there is outside this specification.
-. *`amd64` only.* All the author's machines are `x86_64`.
+. *`x86_64` Linux and a `darwin-arm64` hub.* Six machines are `x86_64`
+  Linux; ws9 is `arm64` macOS and gets the hub only, built on a macOS
+  runner of GitHub Actions.
 . *No code signing and no automatic updates*: the release files are checked
-  against `SHA256SUMS`, and installing a new version is `apt` or `flatpak`.
+  against `SHA256SUMS`, and installing a new version is `apt`, `flatpak` or unpacking an archive.
+  TLS certificates and DNS tokens of the hubs (herdr-manifold#7) are never
+  part of a release or of the repository.
 
 == Existing installations
 
 None: nothing has been released. From `v0.1.0` on, a newer `.deb` or
 Flatpak replaces the previous one in place; the settings of the application
-live in `~/.config/herdr-manifold` (`~/.var/app/uno.almaz.herdr-manifold`
-under Flatpak) and survive an upgrade.
+live in `~/.config/herdr-manifold` and the hub's state in
+`~/.local/state/herdr-manifold`; both survive an upgrade, as does a hub
+archive unpacked over the previous one.
 
 == Constitution
 
@@ -182,31 +212,36 @@ under Flatpak) and survive an upgrade.
 | K4
 | `.deb` from the branch, built by `scripts/build-deb.sh` on ws1:
   `dpkg-deb -f` gives `Package: herdr-manifold`, the version and `Depends`;
-  `apt install ./<file>.deb` succeeds in a clean `debian:bookworm`
-  container; installed on ws1, `herdr-manifold --version` runs and the
-  window opens.
+  `apt install ./<file>.deb` succeeds in clean `debian:bookworm` and
+  `debian:trixie` containers; installed on ws1–ws5, `herdr-manifold
+  --version` runs, `herdr-manifold.service` starts, and the window opens
+  on the hub of the machine.
 
 | K5
 | Flatpak from the branch, built by `scripts/build-flatpak.sh`: `flatpak
   info` of the installed bundle gives the ID, runtime 25.08 and the
   permissions above and no others; on ws7, installed with `--user`, the
-  application opens and connects to the Herdr session running there.
+  application opens and connects to the hub running there from the
+  `linux-x86_64` archive.
 
 | K6
 | Workflow `test` passes on GitHub for the branch and for its pull request.
 
 | K7
 | Release `v0.1.0`, after the author's tag: workflow `release` runs `test`
-  on the tag, both builds, the release; the three files are there and
-  match `SHA256SUMS`; the `.deb` installs on ws1, ws2 and ws3, the Flatpak
-  on ws7, and each prints `herdr-manifold v0.1.0`. `scripts/release.sh`
+  on the tag, all builds, the release; the five files are there and match
+  `SHA256SUMS`; the `.deb` installs on ws1–ws5, the archives on ws7 and
+  ws9, the Flatpak on ws7; each prints `herdr-manifold v0.1.0` and its hub
+  service starts. `scripts/release.sh`
   then refuses the released tag.
 |===
 
 == Open decisions
 
 * *Herdr on ws7* — whether ws7 runs a Herdr server for K5 and K7, or the
-  Flatpak is checked there against a session started for the purpose.
+  hub there is checked against a session started for the purpose.
+* *An Electron shell for macOS* — whether ws9 needs one, and whether to
+  build it without an Apple signature.
 * *Dependency updates* — Electron, electron-builder and the runtime branch
   move on their own schedule; qws and lxqt-weather keep them current with
   a specification of their own, and so will herdr-manifold, later.
