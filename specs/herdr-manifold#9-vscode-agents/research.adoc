@@ -1,0 +1,152 @@
+= Agents of Ovis in VS Code: research
+:toc: left
+:toc-title: Contents
+:sectnums:
+:revdate: 2026-11-12
+
+What the specification rests on: how Ovis can and cannot be reached from a
+VS Code extension. Established on 2026-11-12 against the author's Ovis on
+ws1, by reading its source and by read-only requests with its token.
+
+== Setup
+
+* Ovis v0.5.3 (`github.com/devswha/ovis`), clone `~/.local/share/ovis` on
+  ws1, listening on `127.0.0.1:7317` behind Caddy at
+  `https://ws1.nb.kovrov.space` (NetBird). Source references below are
+  relative to that clone.
+* Herdr 0.9.5, protocol 22, on ws1, ws2, ws3, ws4, ws5, ws7 and ws9; Ovis
+  reaches ws1 locally and all seven through its own SSH bridges.
+* VS Code 1.146.0 on ws1.
+* Requests: `curl` with `Authorization: Bearer $OVIS_TOKEN`, the token
+  read from `~/.config/ovis/env`. Only `GET` requests were sent; no
+  question was answered.
+
+== Framing the web app is refused
+
+The page is served with
+`Content-Security-Policy: … frame-ancestors 'none'`
+(`server/static.ts:101-116`; seen on the live server with
+`curl -sk -D - https://ws1.nb.kovrov.space/`). A VS Code webview and the
+Simple Browser are iframes, so the app does not load in them.
+
+Its cookies are `SameSite=Strict` (`server/devices.ts:149`,
+`server/auth.test.ts:228`). Inside a webview the top-level site is VS Code,
+not Ovis, so even with the framing header removed by the proxy the browser
+would not send them.
+
+Both are deliberate: the app gives the terminals of every machine, and the
+two rules keep other pages from framing it or acting with its cookies.
+
+== Authentication without cookies
+
+* The shared token is accepted as `Authorization: Bearer <token>`
+  (`server/auth.ts:55-99`); a paired device's own token as
+  `Authorization: Device <token>` (`server/auth.ts:103-110`).
+* A state-changing request without `Origin` and without a token or device
+  cookie is taken as a non-browser client and admitted
+  (`server/machine-security.ts:24-45`). The machine routes additionally
+  require `x-herdr-machine: 1` on anything but `GET` and `HEAD`
+  (`server/machine-api.ts:162`). A cross-site page cannot send that header
+  without a CORS preflight, which the server never answers.
+
+== Machines and agents
+
+`GET /api/machines` → 200, 165 034 bytes:
+
+----
+{ "machines": [
+  { "id": "local" | <uuid>, "name": "ws1", "kind": "local" | "ssh",
+    "state": "connected", "source_boot_id": <uuid>,
+    "herdr": { "version": "0.9.5", "protocol": 22, "terminal_attach": true },
+    "snapshot": {
+      "workspaces": [...], "tabs": [...], "panes": [...], "layouts": [...],
+      "agents": [
+        { "pane_id": "w1:p1", "workspace_id": "w1", "tab_id": "w1:t1",
+          "agent": "claude" | "codex" | ...,
+          "agent_status": "idle" | "working" | "blocked" | "done",
+          "terminal_title", "terminal_title_stripped", "cwd",
+          "foreground_cwd", "agent_session", "state_change_seq",
+          "completion_seq", "revision", "focused", "terminal_id" } ] } } ] }
+----
+
+* Eight entries: ws1 as `local` and ws1 again through a bridge, then ws2,
+  ws3, ws4, ws5, ws7, ws9. The two ws1 entries have the same
+  `source_boot_id`: it identifies the machine, the entry id does not.
+* 99 agents in all, ws1 counted twice (26 each). Statuses seen:
+  `idle`, `working`, `blocked`, `done`.
+
+== The event stream
+
+`GET /api/machines/events` (SSE, `server/machine-api.ts:190`,
+`server/machine-events.ts`), sampled for 6 s:
+
+[cols="2,1,1",options="header"]
+|===
+| `type` | events | bytes
+| `machines` — the whole roster, as above | 10 | 1 624 040
+| `machine-message` / `pane-status` | 2 | 513
+| `herdr-sidebar` | 1 | 45
+| `preferences` | 1 | 303
+| `seen` | 1 | 1 534
+| `relay-pairings` | 1 | 46
+|===
+
+A `pane-status` event:
+
+----
+{ "type": "machine-message", "machine_id": "local",
+  "message": { "type": "pane-status", "pane_id": "w6:p3",
+               "agent_status": "working", "finish_epoch": <uuid>,
+               "finish_id": 4, "context": { "used": 142526, "window": 1000000 } } }
+----
+
+`herdr-sidebar` came with `"agents": null`: the list of agents is to be
+taken from `snapshot.agents`.
+
+Not established: whether ten full rosters in 6 s is a burst on connecting
+or the steady rate. At the steady rate it is about 1 GB an hour.
+
+== Pending questions
+
+`GET /api/pane/prompt?pane_id=<pane>` for ws1's own panes and
+`GET /api/machines/<id>/pane/prompt?pane_id=<pane>` for a bridged machine
+(`server/prompt.ts:1450`, `server/dispatch.ts:373-387`) both answered 200.
+
+For a Claude agent in `blocked` on ws2:
+
+----
+{ "prompt": { "id": "77e6668ac437", "agent": "claude", "kind": "question",
+              "title": "… · 1 of 2", "question": "…", "body": null,
+              "options": [ { "label", "description" }, ... ],
+              "multi_select": false, "custom_option_index": 3,
+              "steps": [ { "label", "answered", "current" }, ... ],
+              "own_text": { ... } },
+  "suggestion": null, "restored": null }
+----
+
+For an `idle` agent on ws1: `"prompt": null`.
+
+The answer, from the source only (`public/sw.js:395-440`): `POST
+/api/pane/prompt/answer` with `{ "pane_id", "prompt_id", "option_index" }`;
+409 when the question changed or was answered on another device meanwhile.
+Ovis's own push notification shows answer buttons only for ws1's own panes
+(`machine_id` `local`, `public/sw.js:402`) and only for questions it finds
+answerable whole (`server/push.ts`, `promptActions`).
+
+Not established: the answer through a bridge,
+`POST /api/machines/<id>/pane/prompt/answer`.
+
+== Link to a pane
+
+`https://<ovis>/?machine=<id>&pane=<pane_id>&view=chat` opens the pane in
+the chat view (`server/alert-webhook.ts:137-145`, `src/lib/deepLink.ts`);
+`machine` is left out for ws1's own panes.
+
+== Ovis's own alerts
+
+Settings → Alerts → Also send to sends alerts to one destination: an ntfy
+topic, a Slack or Discord webhook, a Telegram bot or plain JSON to a URL
+(`server/alert-webhook.ts`, `docs/guide.md:615-622`). It goes from ws1 to
+the receiver, so an extension on another machine would have to listen on
+a port reachable over NetBird. The message carries no prompt id, so it
+cannot answer. Ovis sends no alert while any of its windows is in front.

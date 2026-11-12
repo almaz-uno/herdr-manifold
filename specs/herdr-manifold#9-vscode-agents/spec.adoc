@@ -1,0 +1,171 @@
+= Agents of Ovis in VS Code
+:toc: left
+:toc-title: Contents
+:sectnums:
+:revdate: 2026-11-12
+:status: draft
+:issue: herdr-manifold#9
+
+== What and why
+
+On 2026-11-12 the author decided to live on Ovis
+(link:../herdr-manifold%237-hub-and-web-app/spec.adoc[herdr-manifold#7],
+decision "Ovis for now"): one server on ws1 reaches the Herdr servers of
+all machines and serves a web app to the desktops and the phone. VS Code,
+where the author works, has no view of it.
+
+The author wants two things in VS Code (2026-11-12):
+
+* the agents of all machines with their states in the sidebar;
+* notifications when an agent finishes or asks something, with the
+  answer given from the notification where the question allows it.
+
+Not wanted: the whole Ovis interface in a tab, Herdr panes as VS Code
+terminals.
+
+This specification is the first code of the repository: it describes the
+extension from scratch.
+
+== Direction
+
+. *A client of Ovis's HTTP API, not a frame.* Ovis refuses to be framed
+  (`frame-ancestors 'none'`) and keeps its cookies `SameSite=Strict`
+  (link:research.adoc[research], "Framing the web app is refused"); both
+  protect the terminals and are not worked around. The extension talks to
+  the same API the web app uses, from Node, and never loads the app.
+. *Connection.* The setting `herdrManifold.ovis.url` holds Ovis's address
+  (`https://ws1.nb.kovrov.space` for the author). The command
+  "herdr-manifold: Set Ovis token" stores the token in VS Code's
+  `SecretStorage`; it is never written to settings or to the log. Requests
+  carry `Authorization: Bearer <token>`; requests that change something
+  also carry `x-herdr-machine: 1`, the header by which Ovis admits a
+  non-browser client (research, "Authentication without cookies").
+. *Where it runs.* `extensionKind: ["ui"]`: on the author's machine, also
+  in a Remote-SSH window, so there is one set of notifications per desktop
+  whatever folder is open.
+. *The view.* A view "Agents" in a container of its own on the activity
+  bar: machines in the order of Ovis's roster, under each its agents.
+  * An agent shows its `terminal_title_stripped`, the last component of its
+    `cwd` as description, and an icon for `agent_status`: `idle`,
+    `working`, `blocked`, `done`.
+  * The two entries of ws1 (`local` and its bridge) are one machine: the
+    roster is deduplicated by `source_boot_id`, the `local` entry kept.
+  * A machine that is not `connected` shows its state and no agents.
+  * A click on an agent opens it in the browser:
+    `<url>/?machine=<id>&pane=<pane_id>&view=chat`, `machine` left out for
+    `local` (research, "Link to a pane").
+. *Data.* `GET /api/machines` at start, then the SSE stream
+  `/api/machines/events`: `pane-status` messages update one agent, a
+  `machines` event replaces the roster. A broken stream is reopened with a
+  backoff up to 30 s, and the view says it is offline meanwhile.
+. *Notifications.* Only for transitions seen while the extension runs, not
+  for the states found at start.
+  * `working` → `done`: "<machine> · <title> finished", with "Open".
+  * → `blocked`: the extension reads the question
+    (`…/pane/prompt?pane_id=`). A question of one step with two short
+    options, no multiple choice and no own text is shown with the options
+    as buttons and "Open"; a button sends
+    `POST …/pane/prompt/answer` with the question's id. A 409 answer says
+    the question changed or was answered elsewhere. Any other question
+    shows "<machine> · <title> asks" with "Open".
+  * The setting `herdrManifold.notify` turns each kind off: `finished`,
+    `questions`.
+
+== Choices made for the author
+
+Each is the recommended option, taken so that the work could proceed; the
+author may overturn any of them.
+
+. *An API client* over the Ovis app in a webview: no change to Ovis and no
+  weakening of its protection; the price is a dependence on an API Ovis
+  does not document or version.
+. *The browser for opening a pane* over a webview of the extension's own:
+  the chat and the terminal stay Ovis's.
+. *`extensionKind: ["ui"]`* over running in the workspace's host.
+. *This repository*, `almaz-uno/herdr-manifold`, over a new one: the
+  extension is the VS Code front end herdr-manifold#1 planned, with Ovis in
+  place of the core.
+
+== Open decisions
+
+* *Rate of the stream* — the sample saw ten full rosters, 1.6 MB, in 6 s
+  (research, "The event stream"). If that is the steady rate, the
+  extension polls `/api/machines` instead, or Ovis is asked upstream for a
+  stream without full rosters.
+* *Answering through a bridge* — `POST /api/machines/<id>/pane/prompt/answer`
+  is read from the source, not tried.
+* *Which questions get buttons* — the rule above, or the one of Ovis's
+  push (`server/push.ts`, `promptActions`), so that both agree.
+* *Duplicate notifications* — Ovis's Web Push or Telegram alert and the
+  extension's notification arrive for the same event.
+* *Compatibility with Ovis updates* — Ovis updates itself; the extension
+  records the Ovis version it was checked with and what it does when a
+  field it needs is missing.
+* *Packaging* — a `.vsix` installed by hand for the trial; whether it
+  joins the releases of herdr-manifold#3.
+
+== Relation to other specifications
+
+* herdr-manifold#7: follows its decision "Ovis for now"; the extension is a
+  thin front end of one server, the shape #7 gives every front end.
+* herdr-manifold#1: the VS Code extension it planned as the second front
+  end, reaching Ovis instead of the core; TypeScript as decided there.
+* herdr-manifold#5: questions of agents answered from VS Code, as Ovis
+  reads them; messaging between agents is not covered.
+* herdr-manifold#3: packaging is left open above.
+
+== Acceptance criteria
+
+[cols="1,6"]
+|===
+| # | Criterion and method
+
+| K1
+| The answer is tried and recorded in research. On a throwaway Herdr session
+  (never the session `default`), on ws1's own Herdr and on a bridged
+  machine, a Claude agent asks a question with two options;
+  `POST …/pane/prompt/answer` with its id moves the agent on, and the same
+  request repeated returns 409.
+
+| K2
+| The stream is measured for 10 min with agents working on at least three
+  machines: events and bytes per minute of each `type`, recorded in
+  research, and the choice between the stream and polling made from them.
+
+| K3
+| View, checked by hand in VS Code (version recorded) on ws2: machines ws1,
+  ws2, ws3, ws4, ws5, ws7, ws9, ws1 once; each agent's state equals the one
+  in Ovis's web app at the same moment (screenshot of both).
+
+| K4
+| A change of state reaches the view within 2 s: the extension's output
+  channel logs the arrival of each `pane-status` and the refresh of the
+  view; the median and the maximum over 20 changes are recorded.
+
+| K5
+| A click on an agent of ws1 and on one of ws3 opens Ovis in the browser on
+  that pane, in the chat view.
+
+| K6
+| On a throwaway session a Claude agent asks permission with two options:
+  a notification with both buttons appears; Deny is delivered and the agent
+  shows the refusal. A second question answered first in the web app: its
+  button in VS Code reports that it was answered elsewhere.
+
+| K7
+| An agent going `working` → `done` gives one notification; starting the
+  extension with agents already `done` or `blocked` gives none.
+
+| K8
+| Without a token the view says so and no request is sent (Ovis's log shows
+  none from ws2); with a wrong one it shows Ovis's refusal. The token is in
+  neither `settings.json` nor the output channel (`grep` for it).
+
+| K9
+| The open decisions above are each closed in this specification — decided,
+  with the experiment that decided it, or moved to a named later
+  specification.
+
+| K10
+| `scripts/check-specs.sh` passes.
+|===
