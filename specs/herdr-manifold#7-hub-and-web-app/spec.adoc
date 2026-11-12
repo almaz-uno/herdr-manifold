@@ -1,0 +1,241 @@
+= Hub and web app
+:toc: left
+:toc-title: Contents
+:sectnums:
+:revdate: 2026-11-12
+:status: draft
+:issue: herdr-manifold#7
+
+== What and why
+
+The author decided on 2026-11-12 to reach herdr-manifold from the phone as
+well as from the desktops. A desktop application alone cannot serve that,
+and messaging between agents
+(link:../herdr-manifold%235-machines-and-messaging/spec.adoc[herdr-manifold#5])
+must work while every window is closed. Both need a process that runs on
+its own: a *hub*.
+
+The hub holds the core of
+link:../herdr-manifold%231-purpose-and-stack/spec.adoc[herdr-manifold#1],
+reaches the Herdr servers of all machines, keeps the messages, and serves
+the user interface as a web app. A browser on a desktop or a phone, the
+Electron application and the VS Code extension are all front ends of the
+same app.
+
+This specification decides the shape: where hubs run, how front ends reach
+them, how the phone gets in, and what the phone shows. It changes no code.
+
+== Decision of 2026-11-12: Ovis for now
+
+Ovis v0.5.3 (see "Prior art") was installed on ws1 the same day and
+compared with the requirements. The author found that it covers most of
+the need: the phone over NetBird with a certificate from Let's Encrypt,
+the machines in one view, chat and live terminal for agent panes, images
+pasted as files, Web Push, updates from its own settings. The author
+decided to live on Ovis and to put this specification and the client of
+herdr-manifold#1 on hold; gaps are collected while Ovis is in use.
+
+The gaps known at the time of the decision:
+
+* *No messaging between agents* (herdr-manifold#5): Ovis delivers text only
+  by typing it into a pane. Its queue `server/pending-input.ts` is close to
+  the wake-up of an idle agent and may serve a broker that runs next to
+  Ovis.
+* *No projects across machines*: Ovis groups machine → workspace → pane.
+* *One server*: Ovis runs on ws1 and reaches the other machines by SSH;
+  there is no second hub to move to (criterion K3 "Failover").
+
+The installation on ws1, as it stands at the decision:
+
+* A systemd user service `ovis` with `MemoryMax=6G`; Ovis listens on
+  `127.0.0.1:7317` and requires its token; telemetry is off.
+* Caddy listens on ws1's NetBird address, port 443, and proxies to Ovis;
+  the certificate for `ws1.nb.kovrov.space` is obtained by DNS-01 with
+  lego and renewed by a timer. This is directions 6 and 7 below, tried on
+  one machine.
+* Updates by Ovis's own updater, from the branch `main` of its clone.
+
+The direction below stays as written, for the case that the gaps turn out
+to need a client of our own.
+
+== Direction
+
+. *A hub on every machine, all alike.* `herdr-manifold serve` runs as a
+  systemd user service on ws1, ws2, ws3, ws4, ws5, ws7 and ws9 (launchd on
+  ws9). No hub is the main one: each reaches every Herdr server of the
+  catalog of machines (Herdr's own, `endpoints.json`) by
+  `remote-client-bridge` and `remote-api-bridge` over SSH, and its own
+  machine by the local socket. This is the rule "machines are equal" of
+  section 8.1 of the requirements, applied to the client.
++
+The API channel (`remote-api-bridge` or `herdr.sock`) of every machine
+stays connected: the sidebar, the phone and the delivery of messages need
+the agents of all machines. The surface channel of a machine is open only
+while some front end shows it, and is closed 30 s after the last one
+leaves. With seven machines a hub on each makes 49 connections; keeping
+their surfaces open would make every Herdr server render tabs for clients
+nobody looks at, and how Herdr shares pane sizes between clients is not
+established.
+. *The core runs in the hub.* The core of herdr-manifold#1 already takes an
+  injected byte transport and talks to the UI through a bridge; in the hub
+  the transport is the SSH bridge or the local socket, and the bridge to
+  the UI is a WebSocket. The core's rule "no Electron, VS Code, Node or DOM
+  imports" stays.
+. *The UI is a web app served by every hub.* The Svelte UI of
+  herdr-manifold#1 is built once and served by the hub over HTTPS. The
+  Electron application becomes a thin shell that opens the local hub's app
+  and adds what a browser cannot: shortcuts a browser keeps for itself
+  (`ctrl+w`, `ctrl+t`, `ctrl+n`), the system clipboard, a window of its
+  own. The VS Code extension does the same in a webview.
++
+Front ends on the hub's own machine may connect through a Unix socket,
+`$XDG_RUNTIME_DIR/herdr-manifold/hub.sock`, readable by the owner only.
+A Flatpak without network permission has a loopback of its own and cannot
+reach `127.0.0.1` of the machine; a socket in the file system it can, by
+`--filesystem=xdg-run/herdr-manifold`.
+. *A desktop uses its own machine's hub*, so a keystroke costs what it
+  costs in herdr-manifold#1: the SSH round trip to the target machine plus
+  the local bound, with no extra hop.
+. *The phone joins the NetBird network* of the machines and opens any hub
+  at `https://wsN.nb.kovrov.space:<port>`. The app knows every hub from the
+  catalog; when the one it uses stops answering, it moves to the next in
+  the author's order (ws1 … ws9) and says so.
+. *Hubs listen on the NetBird interface and on loopback only*, never on a
+  public address. Over that, every request is authenticated (method open
+  below): a hub gives the terminals of every machine, which is remote code
+  execution for whoever reaches it.
+. *A certificate from Let's Encrypt by DNS-01* for `*.nb.kovrov.space`: the
+  challenge is a TXT record `_acme-challenge.nb.kovrov.space` in the public
+  zone `kovrov.space`, while the names themselves resolve to NetBird's
+  private addresses. The certificate is valid on any phone without an own
+  CA, and the hubs stay unreachable from outside. HTTPS is required anyway:
+  over plain HTTP to a non-local address the browser gives no secure
+  context — no service worker, no installable app, no Web Push, no reading
+  of the clipboard.
+. *The phone's view is not the pane grid.* A cell grid of 80 columns does
+  not read on a phone. Its main view is:
+  * the agents of all machines with their states (`<machine>/<pane>`
+    addresses of herdr-manifold#5);
+  * the threads and states of messages, sending a message to an agent;
+  * pending approvals — permission requests relayed by Claude Code channels
+    and approval requests of Codex — answered with one tap; both depend on
+    experiments of herdr-manifold#5 (criterion K8 "delivery by channel",
+    decision "Agents behind a protocol"): a channel registers only in an
+    interactive session and, until it is on an allowlist, after a
+    confirmation at every start;
+  * a pane opened from an agent, read-only by default, scrolled by touch;
+    typing into it is an explicit switch.
+. *Images pasted on the phone* go to the hub as a blob and from there to
+  Herdr as `ClipboardImage`, the way a remote client sends them. For Herdr
+  the hub is always a remote client, so pasting images works for every
+  machine, the hub's own included.
+. *Notifications* reach the phone by the Telegram bot the author already
+  uses, until Web Push of the installed app is tried.
+
+== Choices made for the author
+
+Each is the recommended option, taken so that the work could proceed; the
+author may overturn any of them.
+
+. *Hubs on every machine, all alike*, over one hub on ws1: no single point
+  of failure, and no extra hop for a desktop that is not ws1. The price is
+  that the hubs share state (the inbox, see "Open decisions").
+. *NetBird for the phone*, over a public address behind a reverse proxy or
+  a tunnel: nothing is exposed to the internet, and the network is already
+  there.
+. *DNS-01*, over an own CA installed on the phone: nothing to install, and
+  renewal is unattended.
+. *A view made for the phone*, over the desktop layout scaled down.
+
+== Open decisions
+
+* *Authentication* — passkeys (WebAuthn) bound to the hub's origin, a
+  client certificate, or NetBird's identity of the peer alone. Every hub
+  must accept what another issued, since the phone moves between them.
+* *Shared state of the hubs* — the inbox of herdr-manifold#5, the read
+  marks and the layout of the views: one store replicated between hubs, or
+  each record owned by the hub of the recipient's machine and read through
+  it. This closes the decision "Where the inbox lives" of herdr-manifold#5.
+* *Port and names* — one port on every machine, and whether a name
+  `manifold.nb.kovrov.space` is worth having next to `wsN`.
+* *Sizes of panes with several clients* — Herdr renders a tab for the size
+  of the client's window; what it does when a phone and a desktop watch the
+  same tab is not established (research of herdr-manifold#5, section "Not
+  established"). The read-only phone pane may need its own rendering from
+  `pane.read` instead of the client protocol.
+* *Certificate distribution* — one wildcard certificate renewed on one
+  machine and copied to the others, or each hub renewing its own name.
+* *Who keeps the API token for DNS-01* — the zone `kovrov.space` must allow
+  a token limited to `_acme-challenge` records.
+
+== Relation to other specifications
+
+* herdr-manifold#1: the core and the UI are unchanged; the Electron
+  application stops owning the core and becomes a shell around the local
+  hub's app. Its criterion K7 ("input latency") holds for the desktop's
+  own hub.
+* herdr-manifold#5: the broker of messages is part of the hub, which closes
+  its decision "Whether the broker is part of the client"; its decision
+  "Where the inbox lives" moves here as "Shared state of the hubs".
+* herdr-manifold#3: the hub is packaged in the `.deb` of ws1–ws5 with a
+  user unit, and in archives for ws7 (installed in `~/.local`, its root is
+  read-only) and ws9 (macOS, arm64, `launchd`); the Flatpak is the Electron
+  shell only. The hub runs on the Node that ships with Electron, or on one
+  bundled with an archive.
+
+== Prior art
+
+Ovis (`github.com/devswha/ovis`, formerly `herdr-web-ui`, MIT; Bun,
+TypeScript, React, xterm.js) is a browser and phone client for Herdr:
+chat and live terminal for agent panes, machines over SSH, Web Push. It
+installs a bridge of its own on each machine, where this specification uses
+Herdr's bridges; it has no projects across machines and no messaging
+between agents. Its phone view is to be read before ours is designed
+(research of herdr-manifold#5, section "Ovis"). Since 2026-11-12 it is the
+author's working client (see "Decision of 2026-11-12: Ovis for now").
+
+== Acceptance criteria
+
+[cols="1,6"]
+|===
+| # | Criterion and method
+
+| K1
+| A prototype hub on ws1 and ws3, against throwaway Herdr sessions, serves
+  the UI over HTTPS with a certificate obtained by DNS-01 for
+  `*.nb.kovrov.space`; a browser on ws2 and on the author's phone, both in
+  NetBird, opens it without a certificate warning; neither hub answers on
+  a public address (checked from outside NetBird).
+
+| K2
+| From ws2's own hub, keystroke to patch into a pane on ws3: the median and
+  the 95th percentile over 200 keystrokes stay within 2 ms of the direct
+  SSH measurement of herdr-manifold#5 (criterion K1 there).
+
+| K3
+| Failover: with ws1's hub stopped, the phone's app moves to ws3's hub
+  within 10 s, says so, and shows the same agents and messages.
+
+| K4
+| Phone view: the agents of ws1, ws2 and ws3 with their states; a message
+  sent to an agent from the phone; an approval of Claude Code answered from
+  the phone, once criterion K8 of herdr-manifold#5 has passed; a pane
+  opened read-only and scrolled. Each checked by hand and
+  recorded in research with screenshots.
+
+| K5
+| An image pasted on the phone reaches a Claude Code agent on ws1 as a file
+  path, through Herdr's `ClipboardImage`.
+
+| K6
+| Without authentication every request of the hub, the WebSocket included,
+  is refused.
+
+| K7
+| The open decisions above are each closed in this specification — decided,
+  with the experiment that decided it, or moved to a named later
+  specification.
+
+| K8
+| `scripts/check-specs.sh` passes.
+|===
