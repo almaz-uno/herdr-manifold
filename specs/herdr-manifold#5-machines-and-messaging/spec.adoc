@@ -13,9 +13,9 @@ community clients of Herdr. herdr-gpui and Ovis are full clients, but they
 copy the layout of the TUI or of a single machine's sidebar, and neither
 lets agents talk to each other. The author needs two things they lack:
 
-. *views organised by workspace across machines* — ws1, ws2, ws3 and ws7
-  each run their own Herdr server, and the work of one project is spread
-  over them;
+. *views organised by workspace across machines* — seven machines, ws1–ws5,
+  ws7 and ws9 (ws9 is macOS on arm64), each run their own Herdr server, and
+  the work of one project is spread over them;
 . *a reliable scheme of communication between agents* — agent A hands a
   task or a message to agent B, possibly on another machine, and it is not
   lost, not garbled, not typed into a busy or blocked agent; B's answer
@@ -70,14 +70,22 @@ From link:research.adoc[research]:
   as injected byte transports (herdr-manifold#1, "Stack and layout"): the
   application provides one that spawns `ssh`.
 . *Addresses carry the machine*: `<machine>/<pane>`, where `<machine>` is
-  the Herdr profile id, or `local`. `boot_id` tells the client that a
-  server restarted and its ids are no longer valid.
-. *All machines stay connected*; each reconnects on its own with a backoff,
-  and a machine that is down keeps its last state on screen, marked as
-  stale.
-. *Several surfaces at once.* Each connection streams the active tab of its
-  machine, so the client can show panes of different machines side by side
-  — the TUI shows one machine at a time.
+  the label of the machine in the catalog — `ws1/w1:p2`. There is no
+  `local`: all machines are equal, the current one included (link:../herdr-manifold%237-hub-and-web-app/spec.adoc[herdr-manifold#7];
+  requirements, section 8.1). The 32-hex id of the catalog stays the stable
+  key inside the client. `boot_id` tells the client that a server restarted
+  and its ids are no longer valid.
+. *All machines stay connected through the API channel*; each reconnects
+  on its own with a backoff, and a machine that is down keeps its last
+  state on screen, marked as stale.
+. *Surfaces only while watched.* The surface channel of a machine is open
+  only while some front end shows that machine, and is closed 30 s after
+  the last one stops (a proposal of the requirements). With a hub on every
+  machine (link:../herdr-manifold%237-hub-and-web-app/spec.adoc[herdr-manifold#7]) keeping all surfaces open would be 49 connections without
+  a viewer, and how Herdr shares pane sizes between clients is not
+  established.
+. *Several surfaces at once.* Open surfaces of different machines can be
+  shown side by side — the TUI shows one machine at a time.
 . *Projects over machines* (the author's choice, 2026-10-29). The main view
   groups workspaces by project across all machines: a project lists its
   workspaces, panes and agents from every machine, each marked with its
@@ -112,10 +120,14 @@ took it by a tool call; the sender sees every state.
   offers `send`, `inbox`, `ack`, `reply`. Claude Code, Codex and OpenCode
   speak MCP.
 . *The terminal only wakes an agent.* When an agent has unread messages
-  and is `idle` or `done`, the client types a fixed short line ("N new
-  messages: call `inbox`") with `agent.prompt`, and confirms it by the
-  agent turning `working`, as Ovis does. Never into a `blocked` or
-  `working` agent; never the message body.
+  and is `idle` or `done`, the hub of link:../herdr-manifold%237-hub-and-web-app/spec.adoc[herdr-manifold#7] or a Herdr plugin (decision "Who
+  wakes agents") types a fixed short line ("N new messages: call `inbox`")
+  with `agent.prompt`, and confirms it by the agent turning `working`, as
+  Ovis does. Never into a `blocked` or `working` agent; never the message
+  body. Where an agent offers a better way the terminal is not used: a
+  channel for Claude Code (decision "Delivery to Claude Code by a
+  channel"), the protocol of Codex behind a wrapper (decision "Agents
+  behind a protocol").
 . *The human is in the loop*: the client shows threads and states, can hold
   a recipient's inbox for approval, and marks every message as coming from
   an agent, not from the user. Rate limits and deduplication stop loops.
@@ -143,15 +155,16 @@ author may overturn any of them.
   `agent.list`; the remote URL of the repository), or a mapping the author
   keeps. Names differ between machines by accident; repositories may be
   cloned under different paths.
-* *Where the inbox lives* — one broker on ws1 (SQLite), reached from the
-  other machines over SSH; or one per machine with forwarding between them.
-  Losing ws1 stops messaging in the first case.
+* *Where the inbox lives* — moved to link:../herdr-manifold%237-hub-and-web-app/spec.adoc[herdr-manifold#7], decision "Shared state of the
+  hubs": with a hub on every machine, the question is how the hubs share
+  the inbox, not which machine holds it.
 * *Own broker or MCP Agent Mail (Rust)* — Agent Mail already has a durable
   per-recipient feed with a cursor, acknowledgements and a web view; its
   licence ("MIT+Rider") and its fit with Herdr addresses are to be checked.
-* *Whether the broker is part of the client* — messaging must work while
-  the window is closed, so the broker runs as a service of its own; whether
-  it shares the core of herdr-manifold#1 is open.
+* *Whether the broker is part of the client* — closed by link:../herdr-manifold%237-hub-and-web-app/spec.adoc[herdr-manifold#7]: the
+  broker is part of the hub, a service of its own on every machine that
+  holds the core of herdr-manifold#1 and runs while every window is
+  closed.
 * *Waking agents other than Claude Code* — Claude Code can take a message
   between tool calls (cross-session messaging, hooks); for Codex and
   OpenCode, typing the wake-up line may be the only way.
