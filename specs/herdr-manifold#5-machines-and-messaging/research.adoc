@@ -448,6 +448,38 @@ open its own panes (`[[panes]]`, with `env` in `plugin.pane.open`) and bind
 keys to actions. It has no non-terminal UI and cannot touch the machine
 picker, where `Local` is fixed in code (`local_endpoint()`).
 
+=== Channels of Claude Code
+
+A channel is an MCP server, started by Claude Code on stdio, that pushes
+events into the open session (research preview; docs
+https://code.claude.com/docs/en/channels and
+https://code.claude.com/docs/en/channels-reference, read 2026-11-12; the
+flags and checks are in the bundled binary 2.1.322, and the SDK in the VS
+Code extension passes `--channels`).
+
+* The server declares `capabilities.experimental['claude/channel']` and
+  sends `notifications/claude/channel {content, meta}`; the model sees
+  `<channel source="..." key="value">content</channel>`. Keys of `meta`
+  must be letters, digits and `_`; others are dropped silently.
+* Events that arrive while Claude works are queued and delivered together,
+  in order, at the next turn. Nothing is typed into the terminal.
+* No acknowledgement: the notification resolves when written to stdio; an
+  unregistered channel drops events silently.
+* With `claude/channel/permission` the server receives
+  `notifications/claude/channel/permission_request {request_id, tool_name,
+  description, input_preview}` and may answer
+  `notifications/claude/channel/permission {request_id, behavior}`; the
+  terminal dialog stays, the first answer wins.
+* A channel registers only when named for the session: `--channels
+  plugin:<name>@<marketplace>` for plugins on Anthropic's allowlist
+  (Telegram, Discord, iMessage, fakechat), `--dangerously-load-development-
+  channels server:<name>` for any other, after a full-screen confirmation
+  at every start. The development flag is ignored with `-p` and through the
+  Agent SDK.
+* Needs Anthropic authentication (claude.ai or Console); for Team and
+  Enterprise also `channelsEnabled: true`; a server that negotiates MCP
+  revision 2026-07-28 is not registered.
+
 === What it means for messages
 
 An agent run behind its protocol takes a message as input of a turn — a

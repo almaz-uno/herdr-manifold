@@ -190,6 +190,14 @@ section 11.3 of the requirements, without the fixed `Local`. The middle
 way keeps the native TUI under the wrapper's own PTY and takes structure
 from the transcript and hooks — the TUI stays, but a message can only wake
 the agent, not enter its turn.
+* *Delivery to Claude Code by a channel.* An MCP server `inbox` declared
+  as a channel turns each unread message into a `<channel>` event of the
+  running session, queued until the next turn; the native TUI and Herdr's
+  detection stay as they are, and `ack`/`reply` remain tools of the same
+  server. Against it: a research preview, a confirmation at every start
+  until the channel is on an allowlist, interactive sessions only, and no
+  acknowledgement from Claude Code — state `read` still comes from `ack`.
+  Facts in research, section "Channels of Claude Code".
 * *Two tabs of one machine side by side* — needs two connections to one
   server; whether Herdr allows two streams from one client is not
   established.
@@ -257,5 +265,14 @@ the agent, not enter its turn.
   events). The result closes the decision "Who wakes agents".
 
 | K8
+| Delivery by channel: a prototype channel `inbox` in an interactive
+  Claude Code session on ws1, against a throwaway Herdr session; 20
+  numbered messages sent while the agent works arrive as `<channel>` events
+  at the start of its next turn, in order, none lost or merged, each
+  acknowledged by `ack`; nothing is typed into the terminal (Herdr's pane
+  output against the transcript). The result closes the decision "Delivery
+  to Claude Code by a channel".
+
+| K9
 | `scripts/check-specs.sh` passes.
 |===
