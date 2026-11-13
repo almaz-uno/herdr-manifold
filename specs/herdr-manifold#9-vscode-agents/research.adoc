@@ -18,8 +18,8 @@ ws1, by reading its source and by read-only requests with its token.
   reaches ws1 locally and all seven through its own SSH bridges.
 * VS Code 1.146.0 on ws1.
 * Requests: `curl` with `Authorization: Bearer $OVIS_TOKEN`, the token
-  read from `~/.config/ovis/env`. Only `GET` requests were sent; no
-  question was answered.
+  read from `~/.config/ovis/env`. On 2026-11-12 only `GET` requests were
+  sent; on 2026-11-13 one question of a throwaway agent was answered (K1).
 
 == Framing the web app is refused
 
@@ -103,8 +103,38 @@ A `pane-status` event:
 `herdr-sidebar` came with `"agents": null`: the list of agents is to be
 taken from `snapshot.agents`.
 
-Not established: whether ten full rosters in 6 s is a burst on connecting
-or the steady rate. At the steady rate it is about 1 GB an hour.
+=== Ten minutes of the stream (K2, 2026-11-13)
+
+The stream recorded for 600 s on ws1 through Caddy, each line stamped on
+arrival. Agents at the start: working on ws1 (1) and ws2 (2),
+one `blocked` on ws2; at the end: working on ws2 (1). Fewer than the three
+working machines K2 asks for; the roster's rate below does not depend on
+them (see what changes).
+
+[cols="2,1,1,1",options="header"]
+|===
+| `type` | events | bytes | bytes per event
+| `machines` | 1 178 | 192 578 108 | 163 479
+| `machine-message` / `pane-status` | 298 | 78 850 | 265
+| `seen` | 8 | 9 656 | 1 207
+| `preferences` | 2 | 1 831 | 916
+| `relay-pairings` | 1 | 45 | 45
+| `herdr-sidebar` | 1 | 44 | 44
+|===
+
+* *Steady, not a burst*: 108 to 129 rosters in every minute of the ten,
+  17.7 to 21.1 MB a minute; between two rosters a median of 0.19 s, at most
+  2.04 s. About 1.15 GB an hour for one open stream.
+* *What changes*: of 1 177 consecutive pairs of rosters, 782 are identical.
+  In the others the changed fields are mostly `terminal_title` (620 pairs;
+  agents animate their title), then `context.used` (215), `agent_status`
+  (51), `state_change_seq` (45), `completion_seq` (34).
+* *Not compressed*: 30 s of the stream are 8 189 707 bytes on the wire with
+  `Accept-Encoding: gzip` and without it. `GET /api/machines` is gzipped by
+  Ovis itself: 14 530 bytes instead of 163 577. Neither has an `ETag`.
+* The ten rosters in 6 s seen first were therefore the ordinary rate.
+* The web app of Ovis reads the same stream: each open tab, the phone's
+  included, receives the same 1 GB an hour.
 
 == Pending questions
 
@@ -133,8 +163,41 @@ Ovis's own push notification shows answer buttons only for ws1's own panes
 (`machine_id` `local`, `public/sw.js:402`) and only for questions it finds
 answerable whole (`server/push.ts`, `promptActions`).
 
-Not established: the answer through a bridge,
-`POST /api/machines/<id>/pane/prompt/answer`.
+=== The answer through a bridge (K1, 2026-11-13)
+
+Stand, all of it removed afterwards:
+
+* a throwaway Herdr session `k1-probe` on ws2 (`herdr --session k1-probe
+  server`), one workspace in `~/.cache/k1-probe`, Claude Code 2.1.323 in it
+  told to ask "K1 probe: which word?" with the options Alpha and Beta;
+* in Ovis, a PC `ws2-k1` with the session `k1-probe`, added by the author
+  from the web app. Ovis refuses a second PC whose `ssh -G` gives the same
+  `user@hostname:port` (`server/machines.ts:1004`), whatever its session,
+  so `ws2-k1` was a temporary SSH alias naming ws2 by its NetBird address.
+  Adding a PC is refused with the shared token: only the owner's signed-in or
+  paired devices, from the app's own page, may change the list of PCs
+  (`server/update-api.ts:85`).
+
+Result:
+
+. `GET /api/machines/<id>/pane/prompt?pane_id=w1:p1` → the question, id
+  `fe7a24339911`, options Alpha and Beta, `custom_option_index` 2.
+. `POST /api/machines/<id>/pane/prompt/answer` with
+  `{"pane_id":"w1:p1","prompt_id":"fe7a24339911","option_index":1}`, the
+  bearer token and `x-herdr-machine: 1` → 200 `{"ok":true}` in 0.19 s. The
+  agent recorded "K1 probe: which word? → Beta" and replied `Beta`: the
+  option is chosen by its index, not by the cursor, which stood on Alpha.
+. The same request again → 409 `prompt_changed`, "The interactive prompt
+  changed; reopen it and try again."
+
+Not tried: the answer on ws1's own Herdr, `POST /api/pane/prompt/answer`.
+It is the route Ovis's own notification buttons use (`public/sw.js`), and a
+throwaway session on ws1 cannot be reached by it: Ovis's `local` is the
+default session.
+
+A `pane_id` is unique only within one Herdr session: the default session of
+ws2 has a `w1:p1` too. An answer is addressed by the PC's id and the
+question's id together, never by the pane alone.
 
 == Link to a pane
 

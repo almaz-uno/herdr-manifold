@@ -54,10 +54,14 @@ extension from scratch.
   * A click on an agent opens it in the browser:
     `<url>/?machine=<id>&pane=<pane_id>&view=chat`, `machine` left out for
     `local` (research, "Link to a pane").
-. *Data.* `GET /api/machines` at start, then the SSE stream
-  `/api/machines/events`: `pane-status` messages update one agent, a
-  `machines` event replaces the roster. A broken stream is reopened with a
-  backoff up to 30 s, and the view says it is offline meanwhile.
+. *Data.* `GET /api/machines` with `Accept-Encoding: gzip` every 1.5 s;
+  each answer replaces the roster, and a transition is a change of an
+  agent's `agent_status` (with its `state_change_seq`) between two answers.
+  The SSE stream `/api/machines/events` is not used: it sends the whole
+  roster uncompressed about twice a second, 1.15 GB an hour, while the
+  polling is about 35 MB an hour (research, "Ten minutes of the stream").
+  A failed request is retried with a backoff up to 30 s, and the view says
+  it is offline meanwhile.
 . *Notifications.* Only for transitions seen while the extension runs, not
   for the states found at start.
   * `working` → `done`: "<machine> · <title> finished", with "Open".
@@ -85,15 +89,21 @@ author may overturn any of them.
 . *This repository*, `almaz-uno/herdr-manifold`, over a new one: the
   extension is the VS Code front end herdr-manifold#1 planned, with Ovis in
   place of the core.
+. *Polling over the stream*, after K2 (2026-11-13): the stream proved a
+  steady 1.15 GB an hour; polling every 1.5 s keeps K4's 2 s.
+. *Answers to bridged machines too*, after K1 (2026-11-13): the answer
+  through a bridge works with the bearer token, and a repeated or stale
+  answer gets 409, so buttons are offered for every machine, not only for
+  ws1's own panes as Ovis's push does.
 
 == Open decisions
 
-* *Rate of the stream* — the sample saw ten full rosters, 1.6 MB, in 6 s
-  (research, "The event stream"). If that is the steady rate, the
-  extension polls `/api/machines` instead, or Ovis is asked upstream for a
-  stream without full rosters.
-* *Answering through a bridge* — `POST /api/machines/<id>/pane/prompt/answer`
-  is read from the source, not tried.
+* *A stream without full rosters upstream* — whether to ask Ovis for one
+  (only `pane-status` and changes), which would also spare its own web app
+  the 1 GB an hour; polling does not wait for it.
+* *The answer on ws1's own Herdr* — `POST /api/pane/prompt/answer` is
+  Ovis's own route for its notification buttons, not tried by K1 (research,
+  "The answer through a bridge").
 * *Which questions get buttons* — the rule above, or the one of Ovis's
   push (`server/push.ts`, `promptActions`), so that both agree.
 * *Duplicate notifications* — Ovis's Web Push or Telegram alert and the
@@ -139,8 +149,10 @@ author may overturn any of them.
 
 | K4
 | A change of state reaches the view within 2 s: the extension's output
-  channel logs the arrival of each `pane-status` and the refresh of the
-  view; the median and the maximum over 20 changes are recorded.
+  channel logs each poll that changes an agent's `agent_status` and the
+  refresh of the view, and the change's moment is taken from the agent's
+  pane (`herdr pane read`); the median and the maximum over 20 changes are
+  recorded.
 
 | K5
 | A click on an agent of ws1 and on one of ws3 opens Ovis in the browser on
